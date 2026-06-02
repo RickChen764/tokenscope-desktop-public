@@ -79,7 +79,9 @@ $latestJson = [ordered]@{
   }
 }
 
-$latestJson | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+$latestJsonText = $latestJson | ConvertTo-Json -Depth 6
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($OutputPath, $latestJsonText, $utf8NoBom)
 
 Write-Host "latest.json created: $OutputPath"
 Write-Host "Update installer: $publishedBundlePath"

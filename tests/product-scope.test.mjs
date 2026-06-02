@@ -360,6 +360,8 @@ test("application exposes a signed Tauri updater workflow", () => {
   assert.ok(releaseScript.includes("$publishedSignaturePath"));
   assert.ok(releaseScript.includes("$installerPattern"));
   assert.ok(releaseScript.includes("_x64-setup.exe"));
+  assert.ok(releaseScript.includes("UTF8Encoding"));
+  assert.ok(releaseScript.includes("WriteAllText"));
   assert.ok(releaseScript.includes('RepoFullName = "RickChen764/tokenscope-desktop-public"'));
   assert.ok(releaseScript.includes("releases/download"));
   assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY_PATH"));
