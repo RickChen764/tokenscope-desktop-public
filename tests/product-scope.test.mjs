@@ -315,3 +315,55 @@ test("release packaging uses a Windows installer instead of a bare executable on
   assert.equal(tauriConfig.bundle.windows.nsis.installerIcon, "icons/icon.ico");
   assert.equal(tauriConfig.bundle.windows.nsis.uninstallerIcon, "icons/icon.ico");
 });
+
+test("application exposes a signed Tauri updater workflow", () => {
+  const packageJson = JSON.parse(readProjectFile("package.json"));
+  const cargoToml = readProjectFile("src-tauri/Cargo.toml");
+  const tauriConfig = JSON.parse(readProjectFile("src-tauri/tauri.conf.json"));
+  const capabilities = JSON.parse(readProjectFile("src-tauri/capabilities/default.json"));
+  const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const dashboardService = readProjectFile("src/services/dashboard.ts");
+  const dashboardTypes = readProjectFile("src/types/dashboard.ts");
+  const releaseScript = readProjectFile("scripts/create-latest-json.ps1");
+  const buildScript = readProjectFile("scripts/build-release.ps1");
+
+  assert.ok(packageJson.dependencies["@tauri-apps/plugin-updater"]);
+  assert.ok(packageJson.dependencies["@tauri-apps/plugin-process"]);
+  assert.ok(cargoToml.includes("tauri-plugin-updater"));
+  assert.ok(cargoToml.includes("tauri-plugin-process"));
+  assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
+  assert.ok(tauriConfig.plugins.updater.pubkey.length > 80);
+  assert.deepEqual(tauriConfig.plugins.updater.endpoints, [
+    "https://github.com/RickChen764/tokenscope-desktop-public/releases/latest/download/latest.json",
+  ]);
+  assert.equal(tauriConfig.plugins.updater.windows.installMode, "passive");
+  assert.ok(capabilities.permissions.includes("updater:default"));
+  assert.ok(capabilities.permissions.includes("process:default"));
+  assert.ok(tauriEntrypoint.includes("tauri_plugin_updater::Builder::new().build()"));
+  assert.ok(tauriEntrypoint.includes("tauri_plugin_process::init()"));
+
+  assert.ok(settingsPage.includes("checkForAppUpdate"));
+  assert.ok(settingsPage.includes("installPendingAppUpdate"));
+  assert.ok(settingsPage.includes("update-progress-bar"));
+  assert.ok(settingsPage.includes("应用更新"));
+  assert.ok(settingsPage.includes("下载并安装"));
+  assert.ok(dashboardService.includes("@tauri-apps/plugin-updater"));
+  assert.ok(dashboardService.includes("@tauri-apps/plugin-process"));
+  assert.ok(dashboardService.includes("downloadAndInstall"));
+  assert.ok(dashboardService.includes("relaunch"));
+  assert.ok(dashboardTypes.includes("interface AppUpdateInfo"));
+  assert.ok(dashboardTypes.includes("interface AppUpdateProgress"));
+
+  assert.ok(releaseScript.includes("latest.json"));
+  assert.ok(releaseScript.includes("windows-x86_64"));
+  assert.ok(releaseScript.includes("$publishedSignaturePath"));
+  assert.ok(releaseScript.includes("$installerPattern"));
+  assert.ok(releaseScript.includes("_x64-setup.exe"));
+  assert.ok(releaseScript.includes('RepoFullName = "RickChen764/tokenscope-desktop-public"'));
+  assert.ok(releaseScript.includes("releases/download"));
+  assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY_PATH"));
+  assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY = Get-Content"));
+  assert.ok(buildScript.includes("pnpm exec tauri build --ci"));
+  assert.ok(buildScript.includes("tokenscope-desktop.key"));
+});

@@ -65,6 +65,20 @@ export interface SyncSettings extends SyncSettingsInput {
   last_error: string | null;
 }
 
+export interface AppUpdateInfo {
+  available: boolean;
+  current_version: string | null;
+  version: string | null;
+  date: string | null;
+  body: string | null;
+}
+
+export interface AppUpdateProgress {
+  event: "Started" | "Progress" | "Finished";
+  downloaded_bytes: number;
+  content_length: number | null;
+}
+
 export interface DashboardSummary {
   total_tokens: number;
   input_tokens: number;

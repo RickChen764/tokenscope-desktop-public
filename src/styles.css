@@ -918,6 +918,60 @@ h2 {
   margin-bottom: 0;
 }
 
+.app-update-card {
+  display: grid;
+  gap: 16px;
+}
+
+.app-update-card .panel-heading {
+  margin-bottom: 0;
+}
+
+.update-status-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.update-notes {
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  color: var(--muted-strong);
+  line-height: 1.6;
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.update-progress-block {
+  display: grid;
+  gap: 8px;
+}
+
+.update-progress-meta {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.82rem;
+  font-weight: 800;
+  justify-content: space-between;
+}
+
+.update-progress-bar {
+  background: #dce7e4;
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.update-progress-bar span {
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  display: block;
+  height: 100%;
+  transition: width 160ms ease;
+}
+
 .sync-control-grid {
   display: grid;
   gap: 12px;

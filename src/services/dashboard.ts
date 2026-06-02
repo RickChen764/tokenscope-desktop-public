@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import type {
   AgentImportResult,
   AgentSourceSummary,
@@ -16,6 +18,8 @@ import type {
   LocalAgentStatus,
   SyncSettings,
   SyncSettingsInput,
+  AppUpdateInfo,
+  AppUpdateProgress,
   TopDimensionRow,
   CustomImporterPreview,
   CustomImporterProfile,
@@ -32,6 +36,8 @@ declare global {
 }
 
 export type AgentImportMode = "incremental" | "full";
+
+let pendingAppUpdate: Update | null = null;
 
 const emptySummary: DashboardSummary = {
   total_tokens: 0,
@@ -347,6 +353,64 @@ export async function runBackgroundSyncOnce() {
   }
 
   return invoke<SyncSettings>("run_background_sync_once");
+}
+
+function toAppUpdateInfo(update: Update | null): AppUpdateInfo {
+  return {
+    available: update !== null,
+    current_version: update?.currentVersion ?? null,
+    version: update?.version ?? null,
+    date: update?.date ?? null,
+    body: update?.body ?? null,
+  };
+}
+
+export async function checkForAppUpdate() {
+  if (!isDesktopRuntime()) {
+    return {
+      available: false,
+      current_version: null,
+      version: null,
+      date: null,
+      body: "浏览器预览环境无法检查应用更新。",
+    };
+  }
+
+  pendingAppUpdate = await check();
+  return toAppUpdateInfo(pendingAppUpdate);
+}
+
+export async function installPendingAppUpdate(
+  onProgress?: (progress: AppUpdateProgress) => void,
+) {
+  requireDesktopRuntime("安装应用更新");
+
+  if (!pendingAppUpdate) {
+    throw new Error("没有可安装的待处理更新，请先检查更新。");
+  }
+
+  let downloadedBytes = 0;
+  let contentLength: number | null = null;
+
+  function emitProgress(event: DownloadEvent) {
+    if (event.event === "Started") {
+      downloadedBytes = 0;
+      contentLength = event.data.contentLength ?? null;
+    } else if (event.event === "Progress") {
+      downloadedBytes += event.data.chunkLength;
+    }
+
+    onProgress?.({
+      event: event.event,
+      downloaded_bytes: downloadedBytes,
+      content_length: contentLength,
+    });
+  }
+
+  const update = pendingAppUpdate;
+  await update.downloadAndInstall(emitProgress);
+  pendingAppUpdate = null;
+  await relaunch();
 }
 
 export function detectLocalAgents() {

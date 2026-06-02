@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop permissions for TokenScope",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": ["core:default", "dialog:default", "process:default", "updater:default"]
 }

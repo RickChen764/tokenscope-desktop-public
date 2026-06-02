@@ -2,9 +2,17 @@
 
 ## 2026-06-02
 
+### 应用内更新
+
+- 接入 Tauri updater，设置页新增“应用更新”卡片，支持检查新版、查看版本说明、下载并安装更新。
+- 配置 GitHub Releases `latest.json` 作为更新端点，Windows 更新安装方式使用被动安装，减少用户手动操作。
+- 生成并配置 Tauri updater 公钥，签名私钥保存在本机 `.tauri` 目录，不提交到仓库。
+- 新增 `scripts/build-release.ps1` 和 `scripts/create-latest-json.ps1`，用于生成带签名的 NSIS 安装包、签名文件和 updater 元数据。
+- 版本提升到 `0.1.1`，该版本作为首个内置 updater 的安装包；旧版用户需要手动安装一次，后续版本可在应用内更新。
+
 ### Windows 安装包发布
 
-- Windows release 打包方式从裸 `tokenscope-desktop.exe` 调整为 NSIS 安装包，主发布产物位于 `src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.0_x64-setup.exe`。
+- Windows release 打包方式从裸 `tokenscope-desktop.exe` 调整为 NSIS 安装包，主发布产物位于 `src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.1_x64-setup.exe`。
 - Tauri `bundle.active` 改为启用，并将 `bundle.targets` 收敛为 `["nsis"]`，为后续接入 Tauri updater 和签名更新包打基础。
 - 新增产品范围测试，确保后续 release 配置不会退回只发布裸 exe 的状态。
 

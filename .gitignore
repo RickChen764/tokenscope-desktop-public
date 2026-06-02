@@ -7,5 +7,11 @@ src-tauri/gen/
 *.sqlite3
 *.db
 *.log
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
 .superpowers/
 .DS_Store

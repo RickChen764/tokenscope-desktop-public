@@ -3,15 +3,23 @@ import { AgentSourcesPanel } from "./AgentSourcesPanel";
 import { CustomImportersPanel } from "./CustomImportersPanel";
 import { DeviceDatasetsPanel } from "./DeviceDatasetsPanel";
 import {
+  checkForAppUpdate,
   detectLocalAgents,
   exportCallsCsv,
   getSyncSettings,
   importDetectedAgents,
+  installPendingAppUpdate,
   listAgentSources,
   runBackgroundSyncOnce,
   saveSyncSettings,
 } from "../services/dashboard";
-import type { AgentSourceSummary, SyncSettings, SyncSettingsInput } from "../types/dashboard";
+import type {
+  AgentSourceSummary,
+  AppUpdateInfo,
+  AppUpdateProgress,
+  SyncSettings,
+  SyncSettingsInput,
+} from "../types/dashboard";
 import { formatDateTime } from "../utils/format";
 
 const SYNC_INTERVAL_OPTIONS = [
@@ -25,6 +33,12 @@ const defaultSyncDraft: SyncSettingsInput = {
   enabled: false,
   interval_minutes: 30,
   sync_on_startup: true,
+};
+
+const emptyUpdateProgress: AppUpdateProgress = {
+  event: "Started",
+  downloaded_bytes: 0,
+  content_length: null,
 };
 
 function syncDraftFromSettings(settings: SyncSettings): SyncSettingsInput {
@@ -57,6 +71,11 @@ export function SettingsPage({
   const [isSyncSettingsLoading, setIsSyncSettingsLoading] = useState(true);
   const [isSavingSyncSettings, setIsSavingSyncSettings] = useState(false);
   const [isRunningBackgroundSync, setIsRunningBackgroundSync] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] =
+    useState<AppUpdateProgress>(emptyUpdateProgress);
   const [notice, setNotice] = useState<{ kind: "error" | "success"; message: string } | null>(
     null,
   );
@@ -272,6 +291,50 @@ export function SettingsPage({
     }
   }
 
+  async function handleCheckForUpdate() {
+    setIsCheckingUpdate(true);
+    setNotice(null);
+    setUpdateProgress(emptyUpdateProgress);
+    try {
+      const nextUpdateInfo = await checkForAppUpdate();
+      setUpdateInfo(nextUpdateInfo);
+      setNotice({
+        kind: "success",
+        message: nextUpdateInfo.available
+          ? `发现新版本 ${nextUpdateInfo.version}，可以下载并安装。`
+          : "当前已经是最新版本。",
+      });
+    } catch (err) {
+      setNotice({
+        kind: "error",
+        message: `检查更新失败：${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    setIsInstallingUpdate(true);
+    setNotice(null);
+    setUpdateProgress(emptyUpdateProgress);
+    try {
+      await installPendingAppUpdate((progress) => {
+        setUpdateProgress(progress);
+      });
+      setNotice({
+        kind: "success",
+        message: "更新安装程序已启动。Windows 会在安装更新时自动关闭当前应用。",
+      });
+    } catch (err) {
+      setNotice({
+        kind: "error",
+        message: `安装更新失败：${err instanceof Error ? err.message : String(err)}`,
+      });
+      setIsInstallingUpdate(false);
+    }
+  }
+
   const syncControlsDisabled =
     isSyncSettingsLoading || isSavingSyncSettings || isRunningBackgroundSync;
   const lastSyncLabel = isSyncSettingsLoading
@@ -289,6 +352,21 @@ export function SettingsPage({
     ? "读取中..."
     : syncSettings?.last_error || "无";
 
+  const updateProgressPercent =
+    updateProgress.content_length && updateProgress.content_length > 0
+      ? Math.min(
+          100,
+          Math.round((updateProgress.downloaded_bytes / updateProgress.content_length) * 100),
+        )
+      : updateProgress.event === "Finished"
+        ? 100
+        : 0;
+  const updateVersionLabel = updateInfo?.available
+    ? `${updateInfo.current_version || "当前版本"} → ${updateInfo.version}`
+    : updateInfo
+      ? "当前已是最新版本"
+      : "尚未检查";
+
   return (
     <section className="settings-page">
       {notice ? <div className={`notice ${notice.kind} inline-notice`}>{notice.message}</div> : null}
@@ -305,6 +383,60 @@ export function SettingsPage({
       <CustomImportersPanel onNotice={setNotice} />
 
       <DeviceDatasetsPanel onNotice={setNotice} />
+
+      <section className="panel app-update-card">
+        <div className="panel-heading settings-heading">
+          <div>
+            <p className="eyebrow">App Update</p>
+            <h2>应用更新</h2>
+            <p>通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。</p>
+          </div>
+          <button
+            className="primary secondary"
+            disabled={isCheckingUpdate || isInstallingUpdate}
+            onClick={() => void handleCheckForUpdate()}
+            type="button"
+          >
+            {isCheckingUpdate ? "检查中..." : "检查更新"}
+          </button>
+        </div>
+
+        <div className="detail-stat-list update-status-list">
+          <div>
+            <span>更新状态</span>
+            <strong>{updateVersionLabel}</strong>
+          </div>
+          <div>
+            <span>发布时间</span>
+            <strong>{formatDateTime(updateInfo?.date ?? null)}</strong>
+          </div>
+        </div>
+
+        {updateInfo?.body ? <p className="update-notes">{updateInfo.body}</p> : null}
+
+        {isInstallingUpdate || updateProgress.downloaded_bytes > 0 ? (
+          <div className="update-progress-block">
+            <div className="update-progress-meta">
+              <span>下载进度</span>
+              <strong>{updateProgressPercent}%</strong>
+            </div>
+            <div className="update-progress-bar" aria-label="下载进度">
+              <span style={{ width: `${updateProgressPercent}%` }} />
+            </div>
+          </div>
+        ) : null}
+
+        <div className="form-actions">
+          <button
+            className="primary"
+            disabled={!updateInfo?.available || isCheckingUpdate || isInstallingUpdate}
+            onClick={() => void handleInstallUpdate()}
+            type="button"
+          >
+            {isInstallingUpdate ? "下载并安装中..." : "下载并安装"}
+          </button>
+        </div>
+      </section>
 
       <section className="panel sync-settings-card" aria-busy={isSyncSettingsLoading}>
         <div className="panel-heading settings-heading">
