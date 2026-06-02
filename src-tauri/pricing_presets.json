@@ -1,0 +1,132 @@
+[
+  {
+    "id": "openai-official-api-standard-2026-06-01",
+    "name": "OpenAI 官方 API 标准定价",
+    "description": "OpenAI API Standard 处理模式的本地价格快照。用于 provider=openai 的统计记录；价格按官方页面核对后内置，不在运行时联网更新。",
+    "source": "official_openai_standard_2026_06_01",
+    "source_url": "https://developers.openai.com/api/docs/pricing",
+    "checked_at": "2026-06-01",
+    "pricing_scope": "Standard processing, short context where applicable, prices per 1M tokens",
+    "rules": [
+      {
+        "id": "official-openai-standard-gpt-5-5-2026-06-01",
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "input_usd_per_1m": 5.0,
+        "cached_input_usd_per_1m": 0.5,
+        "output_usd_per_1m": 30.0,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      },
+      {
+        "id": "official-openai-standard-gpt-5-4-2026-06-01",
+        "provider": "openai",
+        "model": "gpt-5.4",
+        "input_usd_per_1m": 2.5,
+        "cached_input_usd_per_1m": 0.25,
+        "output_usd_per_1m": 15.0,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      },
+      {
+        "id": "official-openai-standard-gpt-5-4-mini-2026-06-01",
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "input_usd_per_1m": 0.75,
+        "cached_input_usd_per_1m": 0.075,
+        "output_usd_per_1m": 4.5,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      },
+      {
+        "id": "official-openai-standard-gpt-5-4-nano-2026-06-01",
+        "provider": "openai",
+        "model": "gpt-5.4-nano",
+        "input_usd_per_1m": 0.2,
+        "cached_input_usd_per_1m": 0.02,
+        "output_usd_per_1m": 1.25,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      }
+    ]
+  },
+  {
+    "id": "openai-official-codex-standard-2026-06-01",
+    "name": "Codex 官方标准定价",
+    "description": "OpenAI 官方 Codex/旗舰模型价格在本地 Codex agent provider 下的映射，用于从 Codex 本地数据库导入的 token 统计。",
+    "source": "official_openai_codex_standard_2026_06_01",
+    "source_url": "https://developers.openai.com/api/docs/pricing",
+    "checked_at": "2026-06-01",
+    "pricing_scope": "OpenAI API Standard processing mapped to provider=codex, prices per 1M tokens",
+    "rules": [
+      {
+        "id": "official-codex-standard-gpt-5-3-codex-2026-06-01",
+        "provider": "codex",
+        "model": "gpt-5.3-codex",
+        "input_usd_per_1m": 1.75,
+        "cached_input_usd_per_1m": 0.175,
+        "output_usd_per_1m": 14.0,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_codex_standard_2026_06_01"
+      },
+      {
+        "id": "official-codex-standard-gpt-5-5-2026-06-01",
+        "provider": "codex",
+        "model": "gpt-5.5",
+        "input_usd_per_1m": 5.0,
+        "cached_input_usd_per_1m": 0.5,
+        "output_usd_per_1m": 30.0,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      },
+      {
+        "id": "official-codex-standard-gpt-5-4-2026-06-01",
+        "provider": "codex",
+        "model": "gpt-5.4",
+        "input_usd_per_1m": 2.5,
+        "cached_input_usd_per_1m": 0.25,
+        "output_usd_per_1m": 15.0,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      },
+      {
+        "id": "official-codex-standard-gpt-5-4-mini-2026-06-01",
+        "provider": "codex",
+        "model": "gpt-5.4-mini",
+        "input_usd_per_1m": 0.75,
+        "cached_input_usd_per_1m": 0.075,
+        "output_usd_per_1m": 4.5,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      },
+      {
+        "id": "official-codex-standard-gpt-5-4-nano-2026-06-01",
+        "provider": "codex",
+        "model": "gpt-5.4-nano",
+        "input_usd_per_1m": 0.2,
+        "cached_input_usd_per_1m": 0.02,
+        "output_usd_per_1m": 1.25,
+        "reasoning_output_usd_per_1m": null,
+        "effective_from": "2026-06-01",
+        "effective_to": null,
+        "source": "official_openai_standard_2026_06_01"
+      }
+    ]
+  }
+]

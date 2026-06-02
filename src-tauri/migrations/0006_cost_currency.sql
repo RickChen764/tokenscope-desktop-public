@@ -1,0 +1,7 @@
+ALTER TABLE pricing_rule ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD';
+
+ALTER TABLE llm_call ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD';
+
+ALTER TABLE daily_usage_agg ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD';
+
+ALTER TABLE external_dataset ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD';
