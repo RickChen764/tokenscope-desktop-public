@@ -1,4 +1,5 @@
 import type { AgentSourceSummary } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { formatInteger } from "../utils/format";
 
 interface AgentSourcesPanelProps {
@@ -10,22 +11,22 @@ interface AgentSourcesPanelProps {
   sources: AgentSourceSummary[];
 }
 
-function sourceStatus(source: AgentSourceSummary) {
+function sourceStatus(source: AgentSourceSummary, t: (message: string) => string) {
   if (!source.detected) {
-    return { className: "missing", label: "未找到" };
+    return { className: "missing", label: t("未找到") };
   }
   if (!source.import_supported) {
-    return { className: "unsupported", label: "暂不支持导入" };
+    return { className: "unsupported", label: t("暂不支持导入") };
   }
   if (source.imported_calls > 0) {
-    return { className: "synced", label: "已同步" };
+    return { className: "synced", label: t("已同步") };
   }
-  return { className: "ready", label: "可导入" };
+  return { className: "ready", label: t("可导入") };
 }
 
-function formatDateTime(value: string | null) {
+function formatDateTime(value: string | null, emptyLabel: string) {
   if (!value) {
-    return "无";
+    return emptyLabel;
   }
 
   return value.replace("T", " ").slice(0, 19);
@@ -44,6 +45,7 @@ export function AgentSourcesPanel({
   onImport,
   sources,
 }: AgentSourcesPanelProps) {
+  const { numberLocale, t } = useI18n();
   const detectedCount = sources.filter((source) => source.detected).length;
   const supportedDetectedCount = sources.filter(
     (source) => source.detected && source.import_supported,
@@ -56,8 +58,8 @@ export function AgentSourcesPanel({
     <section className="panel source-manager">
       <div className="panel-heading source-heading">
         <div>
-          <h2>本地 Agent 检测</h2>
-          <p>检测本机可读取的 Agent 来源路径，并展示已导入到 TokenScope 的同步状态。</p>
+          <h2>{t("本地 Agent 检测")}</h2>
+          <p>{t("检测本机可读取的 Agent 来源路径，并展示已导入到 TokenScope 的同步状态。")}</p>
         </div>
         <div className="agent-actions">
           <button
@@ -66,7 +68,7 @@ export function AgentSourcesPanel({
             onClick={onDetect}
             type="button"
           >
-            {isDetecting ? "检测中..." : "重新检测"}
+            {isDetecting ? t("检测中...") : t("重新检测")}
           </button>
           <button
             className="primary"
@@ -74,43 +76,43 @@ export function AgentSourcesPanel({
             onClick={onImport}
             type="button"
           >
-            {isImporting ? "同步中..." : "手动同步"}
+            {isImporting ? t("同步中...") : t("手动同步")}
           </button>
         </div>
       </div>
 
-      <div className="source-overview" aria-label="本地 Agent 检测概览">
+      <div className="source-overview" aria-label={t("本地 Agent 检测概览")}>
         <div>
-          <span>检测结果</span>
-          <strong>{isLoading ? "读取中..." : `${detectedCount}/${sources.length}`}</strong>
+          <span>{t("检测结果")}</span>
+          <strong>{isLoading ? t("读取中...") : `${detectedCount}/${sources.length}`}</strong>
         </div>
         <div>
-          <span>可同步来源</span>
-          <strong>{isLoading ? "读取中..." : formatInteger(supportedDetectedCount)}</strong>
+          <span>{t("可同步来源")}</span>
+          <strong>{isLoading ? t("读取中...") : formatInteger(supportedDetectedCount, numberLocale)}</strong>
         </div>
         <div>
-          <span>导入量</span>
-          <strong>{isLoading ? "读取中..." : formatInteger(totalImportedCalls)}</strong>
+          <span>{t("导入量")}</span>
+          <strong>{isLoading ? t("读取中...") : formatInteger(totalImportedCalls, numberLocale)}</strong>
         </div>
         <div>
-          <span>最近导入</span>
-          <strong>{isLoading ? "读取中..." : formatDateTime(lastImportedAt)}</strong>
+          <span>{t("最近导入")}</span>
+          <strong>{isLoading ? t("读取中...") : formatDateTime(lastImportedAt, t("无"))}</strong>
         </div>
         <div>
-          <span>最近调用</span>
-          <strong>{isLoading ? "读取中..." : formatDateTime(lastCallAt)}</strong>
+          <span>{t("最近调用")}</span>
+          <strong>{isLoading ? t("读取中...") : formatDateTime(lastCallAt, t("无"))}</strong>
         </div>
       </div>
 
-      {isLoading ? <div className="empty-state small">正在读取本机 Agent 来源...</div> : null}
+      {isLoading ? <div className="empty-state small">{t("正在读取本机 Agent 来源...")}</div> : null}
 
       <div className="source-list">
         {!isLoading && sources.length === 0 ? (
-          <div className="empty-state small">暂无本地 Agent 来源</div>
+          <div className="empty-state small">{t("暂无本地 Agent 来源")}</div>
         ) : null}
 
         {!isLoading && sources.map((source) => {
-          const status = sourceStatus(source);
+          const status = sourceStatus(source, t);
           return (
             <article className="source-row" key={source.id}>
               <div className="source-main">
@@ -120,27 +122,27 @@ export function AgentSourcesPanel({
                 </div>
                 <p className="source-message">{source.message}</p>
                 <div className="source-path">
-                  <span>来源路径</span>
-                  <code>{source.source_path ?? "未发现本地数据库路径"}</code>
+                  <span>{t("来源路径")}</span>
+                  <code>{source.source_path ?? t("未发现本地数据库路径")}</code>
                 </div>
               </div>
 
-              <div className="source-stats" aria-label={`${source.name} 导入统计`}>
+              <div className="source-stats" aria-label={`${source.name} ${t("导入统计")}`}>
                 <div className="source-stat">
-                  <span>导入量</span>
-                  <strong>{formatInteger(source.imported_calls)}</strong>
+                  <span>{t("导入量")}</span>
+                  <strong>{formatInteger(source.imported_calls, numberLocale)}</strong>
                 </div>
                 <div className="source-stat">
                   <span>Token</span>
-                  <strong>{formatInteger(source.total_tokens)}</strong>
+                  <strong>{formatInteger(source.total_tokens, numberLocale)}</strong>
                 </div>
                 <div className="source-stat wide">
-                  <span>最近导入</span>
-                  <strong>{formatDateTime(source.last_imported_at)}</strong>
+                  <span>{t("最近导入")}</span>
+                  <strong>{formatDateTime(source.last_imported_at, t("无"))}</strong>
                 </div>
                 <div className="source-stat wide">
-                  <span>最近调用</span>
-                  <strong>{formatDateTime(source.last_call_at)}</strong>
+                  <span>{t("最近调用")}</span>
+                  <strong>{formatDateTime(source.last_call_at, t("无"))}</strong>
                 </div>
               </div>
             </article>

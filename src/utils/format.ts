@@ -1,5 +1,5 @@
-export function formatInteger(value: number) {
-  return new Intl.NumberFormat("zh-CN", {
+export function formatInteger(value: number, locale = "zh-CN") {
+  return new Intl.NumberFormat(locale, {
     maximumFractionDigits: 0,
   }).format(value);
 }
@@ -35,24 +35,24 @@ export function formatCurrencyName(currency: string) {
   }
 }
 
-export function formatPercent(value: number) {
-  return new Intl.NumberFormat("zh-CN", {
+export function formatPercent(value: number, locale = "zh-CN") {
+  return new Intl.NumberFormat(locale, {
     style: "percent",
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-export function formatLatency(value: number | null) {
+export function formatLatency(value: number | null, emptyLabel = "无") {
   if (value === null) {
-    return "无";
+    return emptyLabel;
   }
 
   return `${Math.round(value)} ms`;
 }
 
-export function formatDateTime(value: string | null) {
+export function formatDateTime(value: string | null, emptyLabel = "无") {
   if (!value) {
-    return "无";
+    return emptyLabel;
   }
 
   return value.replace("T", " ").slice(0, 19);

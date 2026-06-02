@@ -927,6 +927,34 @@ h2 {
   margin-bottom: 0;
 }
 
+.language-select {
+  display: grid;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.language-select span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.language-select select {
+  background: #fff;
+  border: 1px solid rgba(12, 63, 59, 0.16);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+.language-select select:focus-visible {
+  outline: 3px solid rgba(20, 184, 166, 0.22);
+  outline-offset: 2px;
+}
+
 .update-status-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1885,7 +1913,7 @@ h2 {
 
 .clickable-row td:first-child::after {
   color: var(--accent-strong);
-  content: "查看";
+  content: attr(data-action-label);
   font-size: 0.72rem;
   font-weight: 800;
   margin-left: 8px;

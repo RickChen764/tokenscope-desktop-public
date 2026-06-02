@@ -1,16 +1,11 @@
 import { useMemo, useState } from "react";
 import { exportCallsCsv } from "../services/dashboard";
 import type { DashboardRange, LlmCallFilters } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { getLocalDateWindow } from "../utils/date";
 
-const rangeLabels: Record<DashboardRange, string> = {
-  today: "今日",
-  "7d": "近 7 天",
-  "30d": "近 30 天",
-  "90d": "近 90 天",
-};
-
 export function ReportsPage() {
+  const { t } = useI18n();
   const [range, setRange] = useState<DashboardRange>("30d");
   const [isExporting, setIsExporting] = useState(false);
   const [notice, setNotice] = useState<{ kind: "error" | "success"; message: string } | null>(
@@ -33,16 +28,25 @@ export function ReportsPage() {
 
     try {
       const path = await exportCallsCsv(filters);
-      setNotice({ kind: "success", message: `CSV 已导出：${path}` });
+      setNotice({ kind: "success", message: t("CSV 已导出：{path}", { path }) });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `导出报表失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("导出报表失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsExporting(false);
     }
   }
+
+  const rangeLabels: Record<DashboardRange, string> = {
+    today: t("今日"),
+    "7d": t("近 7 天"),
+    "30d": t("近 30 天"),
+    "90d": t("近 90 天"),
+  };
 
   return (
     <section className="reports-page">
@@ -51,13 +55,11 @@ export function ReportsPage() {
       <section className="panel report-export-panel">
         <div>
           <p className="eyebrow">Reports</p>
-          <h2>报表导出</h2>
-          <p>
-            导出本地已统计的调用元数据、Token 和状态，用于审计或进一步分析。
-          </p>
+          <h2>{t("报表导出")}</h2>
+          <p>{t("导出本地已统计的调用元数据、Token 和状态，用于审计或进一步分析。")}</p>
         </div>
         <div className="report-export-controls">
-          <div className="segmented compact-segmented" aria-label="报表日期范围">
+          <div className="segmented compact-segmented" aria-label={t("报表日期范围")}>
             {(["today", "7d", "30d", "90d"] as DashboardRange[]).map((option) => (
               <button
                 className={option === range ? "active" : ""}
@@ -70,7 +72,7 @@ export function ReportsPage() {
             ))}
           </div>
           <button className="primary" disabled={isExporting} onClick={() => void handleExport()} type="button">
-            {isExporting ? "导出中..." : "导出 CSV"}
+            {isExporting ? t("导出中...") : t("导出 CSV")}
           </button>
         </div>
       </section>
@@ -79,18 +81,18 @@ export function ReportsPage() {
         <section className="panel settings-utility">
           <div>
             <p className="eyebrow">Export Scope</p>
-            <h2>导出内容</h2>
+            <h2>{t("导出内容")}</h2>
           </div>
           <div className="detail-stat-list">
             <div>
-              <span>时间范围</span>
+              <span>{t("时间范围")}</span>
               <strong>
-                {dateWindow.from} 至 {dateWindow.to}
+                {dateWindow.from} {t("至")} {dateWindow.to}
               </strong>
             </div>
             <div>
-              <span>字段</span>
-              <strong>调用元数据、Token、状态</strong>
+              <span>{t("字段")}</span>
+              <strong>{t("调用元数据、Token、状态")}</strong>
             </div>
           </div>
         </section>
@@ -98,8 +100,8 @@ export function ReportsPage() {
         <section className="panel settings-utility">
           <div>
             <p className="eyebrow">Privacy Boundary</p>
-            <h2>隐私边界</h2>
-            <p>导出面向统计分析，不包含明文 prompt、response 或 Authorization。</p>
+            <h2>{t("隐私边界")}</h2>
+            <p>{t("导出面向统计分析，不包含明文 prompt、response 或 Authorization。")}</p>
           </div>
         </section>
       </section>

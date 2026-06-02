@@ -1,4 +1,5 @@
 import type { DimensionKind, TopDimensionRow } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { formatInteger } from "../utils/format";
 
 interface TopListProps {
@@ -10,13 +11,14 @@ interface TopListProps {
 }
 
 export function TopList({ isLoading, kind, onRowClick, rows, title }: TopListProps) {
+  const { numberLocale, t } = useI18n();
   return (
     <section className="panel compact" aria-busy={isLoading}>
       <div className="panel-heading">
         <h2>{title}</h2>
       </div>
       {rows.length === 0 ? (
-        <div className="empty-state small">{isLoading ? "加载中..." : "暂无数据"}</div>
+        <div className="empty-state small">{isLoading ? t("加载中...") : t("暂无数据")}</div>
       ) : (
         <table className="compact-table top-list-table">
           <tbody>
@@ -26,6 +28,7 @@ export function TopList({ isLoading, kind, onRowClick, rows, title }: TopListPro
               return (
                 <tr
                   className={onRowClick ? "clickable-row" : ""}
+                  data-action-label={onRowClick ? t("查看") : undefined}
                   key={row.dimension}
                   onClick={onRowClick ? () => onRowClick(row.dimension) : undefined}
                   onKeyDown={
@@ -45,7 +48,7 @@ export function TopList({ isLoading, kind, onRowClick, rows, title }: TopListPro
                       {displayLabel}
                     </span>
                   </td>
-                  <td className="top-list-value">{formatInteger(row.total_tokens)}</td>
+                  <td className="top-list-value">{formatInteger(row.total_tokens, numberLocale)}</td>
                 </tr>
               );
             })}

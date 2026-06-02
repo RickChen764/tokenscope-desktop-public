@@ -11,6 +11,7 @@ import type {
   CustomImporterProfile,
   CustomImporterProfileInput,
 } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { formatInteger } from "../utils/format";
 
 const defaultMappings = JSON.stringify(
@@ -61,22 +62,22 @@ function draftFromProfile(profile: CustomImporterProfile): CustomImporterProfile
   };
 }
 
-function statusLabel(profile: CustomImporterProfile) {
+function statusLabel(profile: CustomImporterProfile, t: (message: string) => string) {
   if (!profile.enabled) {
-    return "已停用";
+    return t("已停用");
   }
   if (profile.last_run_status === "error") {
-    return "最近失败";
+    return t("最近失败");
   }
   if (profile.imported_calls > 0) {
-    return "已同步";
+    return t("已同步");
   }
-  return "可同步";
+  return t("可同步");
 }
 
-function previewValue(value: unknown) {
+function previewValue(value: unknown, emptyLabel: string) {
   if (value === null || value === undefined) {
-    return "空";
+    return emptyLabel;
   }
   if (typeof value === "object") {
     return JSON.stringify(value);
@@ -86,6 +87,7 @@ function previewValue(value: unknown) {
 }
 
 export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
+  const { numberLocale, t } = useI18n();
   const [profiles, setProfiles] = useState<CustomImporterProfile[]>([]);
   const [draft, setDraft] = useState<CustomImporterProfileInput>(defaultDraft);
   const [preview, setPreview] = useState<CustomImporterPreview | null>(null);
@@ -103,7 +105,9 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `读取自定义数据源失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("读取自定义数据源失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsLoading(false);
@@ -129,12 +133,16 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
       setPreview(nextPreview);
       onNotice({
         kind: "success",
-        message: `预览成功：读取 ${nextPreview.rows.length} 行样例。`,
+        message: t("预览成功：读取 {count} 行样例。", {
+          count: nextPreview.rows.length,
+        }),
       });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `预览失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("预览失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsPreviewing(false);
@@ -147,11 +155,13 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
       const saved = await upsertCustomImporterProfile(draft);
       setDraft(draftFromProfile(saved));
       await loadProfiles();
-      onNotice({ kind: "success", message: "自定义数据源配置已保存。" });
+      onNotice({ kind: "success", message: t("自定义数据源配置已保存。") });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `保存失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("保存失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsSaving(false);
@@ -165,13 +175,18 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
       await loadProfiles();
       onNotice({
         kind: "success",
-        message: `自定义数据源同步完成：写入 ${result.imported} 条，跳过 ${result.skipped} 条。`,
+        message: t("自定义数据源同步完成：写入 {imported} 条，跳过 {skipped} 条。", {
+          imported: result.imported,
+          skipped: result.skipped,
+        }),
       });
     } catch (err) {
       await loadProfiles();
       onNotice({
         kind: "error",
-        message: `自定义数据源同步失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("自定义数据源同步失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setRunningProfileId(null);
@@ -186,11 +201,13 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
         setPreview(null);
       }
       await loadProfiles();
-      onNotice({ kind: "success", message: "自定义数据源配置已删除。" });
+      onNotice({ kind: "success", message: t("自定义数据源配置已删除。") });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `删除失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("删除失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     }
   }
@@ -200,8 +217,8 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
       <div className="panel-heading settings-heading">
         <div>
           <p className="eyebrow">Custom Sources</p>
-          <h2>自定义数据源</h2>
-          <p>用只读 SQLite 查询接入其他 Agent。默认只保存统计字段，不写入 prompt/response 明文。</p>
+          <h2>{t("自定义数据源")}</h2>
+          <p>{t("用只读 SQLite 查询接入其他 Agent。默认只保存统计字段，不写入 prompt/response 明文。")}</p>
         </div>
         <button
           className="primary secondary"
@@ -211,15 +228,15 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
           }}
           type="button"
         >
-          新建配置
+          {t("新建配置")}
         </button>
       </div>
 
       <div className="custom-importer-layout">
         <div className="custom-profile-list" aria-busy={isLoading}>
-          {isLoading ? <div className="empty-state small">正在读取自定义数据源...</div> : null}
+          {isLoading ? <div className="empty-state small">{t("正在读取自定义数据源...")}</div> : null}
           {!isLoading && profiles.length === 0 ? (
-            <div className="empty-state small">暂无自定义数据源配置</div>
+            <div className="empty-state small">{t("暂无自定义数据源配置")}</div>
           ) : null}
           {profiles.map((profile) => (
             <article className="custom-profile-row" key={profile.id}>
@@ -227,13 +244,13 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
                 <div className="source-title">
                   <strong>{profile.name}</strong>
                   <span className={`agent-state ${profile.last_run_status === "error" ? "missing" : "synced"}`}>
-                    {statusLabel(profile)}
+                    {statusLabel(profile, t)}
                   </span>
                 </div>
                 <p>{profile.source_key}</p>
                 <div className="custom-profile-stats">
-                  <span>{formatInteger(profile.imported_calls)} 条</span>
-                  <span>{formatInteger(profile.total_tokens)} Token</span>
+                  <span>{formatInteger(profile.imported_calls, numberLocale)} {t("条")}</span>
+                  <span>{formatInteger(profile.total_tokens, numberLocale)} Token</span>
                 </div>
                 {profile.last_run_error ? (
                   <p className="danger-text">{profile.last_run_error}</p>
@@ -248,7 +265,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
                   }}
                   type="button"
                 >
-                  编辑
+                  {t("编辑")}
                 </button>
                 <button
                   className="primary"
@@ -256,14 +273,14 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
                   onClick={() => void handleRun(profile)}
                   type="button"
                 >
-                  {runningProfileId === profile.id ? "同步中..." : "同步"}
+                  {runningProfileId === profile.id ? t("同步中...") : t("同步")}
                 </button>
                 <button
                   className="primary secondary danger-button"
                   onClick={() => void handleDelete(profile)}
                   type="button"
                 >
-                  删除
+                  {t("删除")}
                 </button>
               </div>
             </article>
@@ -273,7 +290,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
         <div className="custom-importer-form">
           <div className="form-grid">
             <label>
-              <span>名称</span>
+              <span>{t("名称")}</span>
               <input
                 value={draft.name}
                 onChange={(event) => updateDraft("name", event.target.value)}
@@ -292,10 +309,10 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
                 onChange={(event) => updateDraft("enabled", event.target.checked)}
                 type="checkbox"
               />
-              <span>启用这个数据源</span>
+              <span>{t("启用这个数据源")}</span>
             </label>
             <label className="field wide">
-              <span>SQLite 数据库路径</span>
+              <span>{t("SQLite 数据库路径")}</span>
               <input
                 value={draft.database_path}
                 onChange={(event) => updateDraft("database_path", event.target.value)}
@@ -303,7 +320,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
               />
             </label>
             <label className="field wide">
-              <span>只读 SELECT 查询</span>
+              <span>{t("只读 SELECT 查询")}</span>
               <textarea
                 value={draft.import_sql}
                 onChange={(event) => updateDraft("import_sql", event.target.value)}
@@ -311,7 +328,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
               />
             </label>
             <label className="field wide">
-              <span>字段映射 JSON</span>
+              <span>{t("字段映射 JSON")}</span>
               <textarea
                 value={draft.mappings_json}
                 onChange={(event) => updateDraft("mappings_json", event.target.value)}
@@ -327,7 +344,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
               onClick={() => void handlePreview()}
               type="button"
             >
-              {isPreviewing ? "预览中..." : "预览查询"}
+              {isPreviewing ? t("预览中...") : t("预览查询")}
             </button>
             <button
               className="primary"
@@ -335,16 +352,17 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
               onClick={() => void handleSave()}
               type="button"
             >
-              {isSaving ? "保存中..." : "保存配置"}
+              {isSaving ? t("保存中...") : t("保存配置")}
             </button>
           </div>
 
           {preview ? (
             <div className="custom-preview">
               <div className="custom-preview-heading">
-                <strong>预览结果</strong>
+                <strong>{t("预览结果")}</strong>
                 <span>
-                  {preview.rows.length} 行，显示 {previewColumns.length} 列
+                  {formatInteger(preview.rows.length, numberLocale)} {t("行，显示")}{" "}
+                  {formatInteger(previewColumns.length, numberLocale)} {t("列")}
                 </span>
               </div>
               <div className="custom-preview-table-wrap">
@@ -360,7 +378,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
                     {preview.rows.slice(0, 5).map((row, rowIndex) => (
                       <tr key={rowIndex}>
                         {previewColumns.map((column) => (
-                          <td key={column}>{previewValue(row[column])}</td>
+                          <td key={column}>{previewValue(row[column], t("空"))}</td>
                         ))}
                       </tr>
                     ))}

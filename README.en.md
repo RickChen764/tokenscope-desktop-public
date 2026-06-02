@@ -88,7 +88,7 @@ pnpm tauri build
 On Windows, the recommended release artifact is the NSIS installer:
 
 ```text
-src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.1_x64-setup.exe
+src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.2_x64-setup.exe
 ```
 
 Build a release package with in-app update support:
@@ -99,8 +99,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 
 The script reads the Tauri updater private key from `C:\Users\<name>\.tauri\tokenscope-desktop.key` and generates the NSIS installer, signature file, and `latest.json`. Do not commit the private key. Upload these files to the GitHub Release:
 
-- `TokenScope.Desktop_0.1.1_x64-setup.exe`
-- `TokenScope.Desktop_0.1.1_x64-setup.exe.sig`
+- `TokenScope.Desktop_0.1.2_x64-setup.exe`
+- `TokenScope.Desktop_0.1.2_x64-setup.exe.sig`
 - `latest.json`
 
 `v0.1.1` is the first version with the updater built in, so users on older versions still need to install it manually once. Later versions can be installed from the in-app update card on the settings page.

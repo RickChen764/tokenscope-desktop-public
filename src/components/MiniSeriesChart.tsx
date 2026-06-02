@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "../i18n";
 import type { DailyUsagePoint } from "../types/dashboard";
 import { formatInteger } from "../utils/format";
 
@@ -49,8 +50,8 @@ function agentKey(point: DailyUsagePoint) {
   return point.dimension?.trim() || "unknown";
 }
 
-function agentLabel(agent: string) {
-  return agent === "unknown" ? "未知 Agent" : agent;
+function agentLabel(agent: string, unknownLabel: string) {
+  return agent === "unknown" ? unknownLabel : agent;
 }
 
 function pathForValues(values: number[], maxTokens: number, plotWidth: number, plotHeight: number) {
@@ -70,8 +71,9 @@ export function MiniSeriesChart({
   agentPoints = [],
   isLoading,
   points,
-  title = "每日用量",
+  title,
 }: MiniSeriesChartProps) {
+  const { numberLocale, t } = useI18n();
   const [chartMode, setChartMode] = useState<ChartMode>("bar");
   const [selectedLineSeriesKeys, setSelectedLineSeriesKeys] = useState<string[]>([]);
 
@@ -156,14 +158,14 @@ export function MiniSeriesChart({
         className: "line-series-total",
         color: "#172124",
         key: "total",
-        label: "总 Token",
+        label: t("总 Token"),
         values: dates.map(totalForDate),
       },
       ...topAgents.map((agent) => ({
         className: "line-series-agent" as const,
         color: colors.get(agent) ?? agentPalette[0],
         key: agent,
-        label: agentLabel(agent),
+        label: agentLabel(agent, t("未知 Agent")),
         values: dates.map((date) => agentTokensByDate.get(date)?.get(agent) ?? 0),
       })),
     ];
@@ -173,7 +175,7 @@ export function MiniSeriesChart({
         className: "line-series-agent",
         color: colors.get("other") ?? agentPalette[agentPalette.length - 1],
         key: "other",
-        label: "其他 Agent",
+        label: t("其他 Agent"),
         values: dates.map((date) => {
           const dayAgents = agentTokensByDate.get(date) ?? new Map<string, number>();
           return [...dayAgents.entries()]
@@ -195,7 +197,7 @@ export function MiniSeriesChart({
       ),
       totalTokens: dayBuckets.reduce((total, bucket) => total + bucket.totalTokens, 0),
     };
-  }, [agentPoints, points]);
+  }, [agentPoints, points, t]);
 
   const allLineSeriesKeys = useMemo(
     () => chartData.lineSeries.map((series) => series.key),
@@ -261,51 +263,51 @@ export function MiniSeriesChart({
     <section className="panel usage-chart-panel usage-chart-main" aria-busy={isLoading}>
       <div className="panel-heading usage-chart-heading">
         <div className="usage-chart-title-block">
-          <p className="eyebrow">趋势分析</p>
-          <h2>{title}</h2>
-          <p>按本地日期汇总，柱状图展示每日 Agent 构成，折线图展示总量和 Agent 趋势。</p>
+          <p className="eyebrow">{t("趋势分析")}</p>
+          <h2>{title ?? t("每日用量")}</h2>
+          <p>{t("按本地日期汇总，柱状图展示每日 Agent 构成，折线图展示总量和 Agent 趋势。")}</p>
         </div>
         <div className="usage-chart-toolbar">
-          <div className="segmented chart-mode-toggle" aria-label="每日用量图表形式">
+          <div className="segmented chart-mode-toggle" aria-label={t("每日用量图表形式")}>
             <button
               className={chartMode === "bar" ? "active" : ""}
               onClick={() => setChartMode("bar")}
               type="button"
             >
-              柱状
+              {t("柱状")}
             </button>
             <button
               className={chartMode === "line" ? "active" : ""}
               onClick={() => setChartMode("line")}
               type="button"
             >
-              折线
+              {t("折线")}
             </button>
           </div>
         </div>
       </div>
       {chartData.dayBuckets.length === 0 ? (
-        <div className="empty-state">{isLoading ? "加载中..." : "暂无调用记录"}</div>
+        <div className="empty-state">{isLoading ? t("加载中...") : t("暂无调用记录")}</div>
       ) : (
         <>
           <div className="usage-chart-summary">
             <div>
-              <span>区间 Token</span>
-              <strong>{formatInteger(chartData.totalTokens)}</strong>
+              <span>{t("区间 Token")}</span>
+              <strong>{formatInteger(chartData.totalTokens, numberLocale)}</strong>
             </div>
             <div>
-              <span>活跃 Agent</span>
-              <strong>{formatInteger(chartData.activeAgentCount || 1)}</strong>
+              <span>{t("活跃 Agent")}</span>
+              <strong>{formatInteger(chartData.activeAgentCount || 1, numberLocale)}</strong>
             </div>
             <div>
-              <span>天数</span>
-              <strong>{formatInteger(chartData.dates.length)}</strong>
+              <span>{t("天数")}</span>
+              <strong>{formatInteger(chartData.dates.length, numberLocale)}</strong>
             </div>
           </div>
 
           <div
             className={`usage-chart-legend${chartMode === "line" ? " selectable-legend" : ""}`}
-            aria-label={chartMode === "line" ? "折线显示选择" : "Agent 图例"}
+            aria-label={chartMode === "line" ? t("折线显示选择") : t("Agent 图例")}
           >
             {chartMode === "line" ? (
               <>
@@ -317,7 +319,7 @@ export function MiniSeriesChart({
                   onClick={selectAllLineSeries}
                   type="button"
                 >
-                  全部
+                  {t("全部")}
                 </button>
                 {chartData.lineSeries.map((series) => {
                   const selected = activeLineSeriesKeySet.has(series.key);
@@ -363,8 +365,9 @@ export function MiniSeriesChart({
                             className="stacked-bar-segment"
                             key={`${bucket.date}-${segment.agent}`}
                             style={{ background: segment.color, height }}
-                            title={`${agentLabel(segment.agent)} / ${bucket.date} / ${formatInteger(
+                            title={`${agentLabel(segment.agent, t("未知 Agent"))} / ${bucket.date} / ${formatInteger(
                               segment.tokens,
+                              numberLocale,
                             )} Token`}
                           />
                         );
@@ -372,12 +375,12 @@ export function MiniSeriesChart({
                     </div>
                   </div>
                   <span className="series-date">{bucket.date.slice(5)}</span>
-                  <span className="series-value">{formatInteger(bucket.totalTokens)}</span>
+                  <span className="series-value">{formatInteger(bucket.totalTokens, numberLocale)}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="line-chart-wrap" role="img" aria-label="每日 Token 用量折线图">
+            <div className="line-chart-wrap" role="img" aria-label={t("每日 Token 用量折线图")}>
               <svg
                 className="line-chart-svg"
                 height={lineChartSize.height}
@@ -441,7 +444,7 @@ export function MiniSeriesChart({
                             style={{ stroke: series.color }}
                           >
                             <title>
-                              {series.label} / {chartData.dates[index]} / {formatInteger(tokens)}{" "}
+                              {series.label} / {chartData.dates[index]} / {formatInteger(tokens, numberLocale)}{" "}
                               Token
                             </title>
                           </circle>

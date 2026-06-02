@@ -4,6 +4,7 @@ import {
   listDataHealthIssues,
 } from "../services/dashboard";
 import type { DataHealthIssueRow, DataHealthSummary } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { formatInteger, formatPercent } from "../utils/format";
 
 const emptySummary: DataHealthSummary = {
@@ -12,29 +13,32 @@ const emptySummary: DataHealthSummary = {
   issues: [],
 };
 
-const issueLabels: Record<string, string> = {
-  failed_call: "失败调用",
-  missing_model: "缺少模型",
-  missing_tokens: "缺少 Token",
-};
-
-const issueDescriptions: Record<string, string> = {
-  failed_call: "调用状态不是 success，可能需要单独排查失败率。",
-  missing_model: "记录没有可用模型名，模型维度分析会缺失。",
-  missing_tokens: "记录没有有效 Token 数，Token 报表会被低估。",
-};
-
-function issueLabel(type: string) {
+function issueLabel(type: string, t: (message: string) => string) {
+  const issueLabels: Record<string, string> = {
+    failed_call: t("失败调用"),
+    missing_model: t("缺少模型"),
+    missing_tokens: t("缺少 Token"),
+  };
   return issueLabels[type] ?? type;
 }
 
-function issueDetail(row: DataHealthIssueRow) {
-  const model = row.model ?? "未知模型";
-  const source = row.agent_id ?? row.workflow_id ?? row.project_id ?? row.session_id ?? "未标注来源";
+function issueDescription(type: string, t: (message: string) => string) {
+  const issueDescriptions: Record<string, string> = {
+    failed_call: t("调用状态不是 success，可能需要单独排查失败率。"),
+    missing_model: t("记录没有可用模型名，模型维度分析会缺失。"),
+    missing_tokens: t("记录没有有效 Token 数，Token 报表会被低估。"),
+  };
+  return issueDescriptions[type] ?? type;
+}
+
+function issueDetail(row: DataHealthIssueRow, t: (message: string) => string) {
+  const model = row.model ?? t("未知模型");
+  const source = row.agent_id ?? row.workflow_id ?? row.project_id ?? row.session_id ?? t("未标注来源");
   return `${row.provider} / ${model} / ${source}`;
 }
 
 export function DataHealthPage() {
+  const { numberLocale, t } = useI18n();
   const [summary, setSummary] = useState<DataHealthSummary>(emptySummary);
   const [issues, setIssues] = useState<DataHealthIssueRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -51,7 +55,9 @@ export function DataHealthPage() {
       setSummary(nextSummary);
       setIssues(nextIssues);
     } catch (err) {
-      setError(`加载数据健康状态失败：${err instanceof Error ? err.message : String(err)}`);
+      setError(t("加载数据健康状态失败：{error}", {
+        error: err instanceof Error ? err.message : String(err),
+      }));
     } finally {
       setIsLoading(false);
     }
@@ -74,31 +80,29 @@ export function DataHealthPage() {
         <section className="panel health-hero">
           <div>
             <p className="eyebrow">Data Health</p>
-            <h2>数据健康检查</h2>
-            <p>
-              检查本地调用记录是否存在缺少模型、缺少 Token 和失败调用等问题。
-            </p>
+            <h2>{t("数据健康检查")}</h2>
+            <p>{t("检查本地调用记录是否存在缺少模型、缺少 Token 和失败调用等问题。")}</p>
           </div>
           <button className="primary secondary" onClick={() => void loadHealth()} type="button">
-            {isLoading ? "刷新中..." : "刷新状态"}
+            {isLoading ? t("刷新中...") : t("刷新状态")}
           </button>
         </section>
 
         <section className="panel compact">
           <div className="panel-heading">
-            <h2>问题分布</h2>
+            <h2>{t("问题分布")}</h2>
           </div>
           <div className="detail-stat-list">
             {summary.issues.length === 0 ? (
               <div>
-                <span>当前状态</span>
-                <strong>{isLoading ? "加载中..." : "未发现问题"}</strong>
+                <span>{t("当前状态")}</span>
+                <strong>{isLoading ? t("加载中...") : t("未发现问题")}</strong>
               </div>
             ) : (
               summary.issues.map((issue) => (
                 <div key={issue.issue_type}>
-                  <span>{issueLabel(issue.issue_type)}</span>
-                  <strong>{formatInteger(issue.calls)}</strong>
+                  <span>{issueLabel(issue.issue_type, t)}</span>
+                  <strong>{formatInteger(issue.calls, numberLocale)}</strong>
                 </div>
               ))
             )}
@@ -108,40 +112,40 @@ export function DataHealthPage() {
 
       <section className="summary-grid compact-summary">
         <div className="summary-card">
-          <span>调用记录</span>
-          <strong>{isLoading ? "加载中..." : formatInteger(summary.total_calls)}</strong>
+          <span>{t("调用记录")}</span>
+          <strong>{isLoading ? t("加载中...") : formatInteger(summary.total_calls, numberLocale)}</strong>
         </div>
         <div className="summary-card">
-          <span>问题调用</span>
-          <strong>{isLoading ? "加载中..." : formatInteger(summary.issue_calls)}</strong>
+          <span>{t("问题调用")}</span>
+          <strong>{isLoading ? t("加载中...") : formatInteger(summary.issue_calls, numberLocale)}</strong>
         </div>
         <div className="summary-card">
-          <span>健康率</span>
-          <strong>{isLoading ? "加载中..." : formatPercent(healthyRate)}</strong>
+          <span>{t("健康率")}</span>
+          <strong>{isLoading ? t("加载中...") : formatPercent(healthyRate, numberLocale)}</strong>
         </div>
       </section>
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>健康问题</h2>
-          <span className="panel-meta">{formatInteger(issues.length)} 条</span>
+          <h2>{t("健康问题")}</h2>
+          <span className="panel-meta">{formatInteger(issues.length, numberLocale)} {t("条")}</span>
         </div>
         {issues.length === 0 ? (
           <div className="empty-state">
-            {isLoading ? "加载中..." : "暂无需要处理的数据健康问题"}
+            {isLoading ? t("加载中...") : t("暂无需要处理的数据健康问题")}
           </div>
         ) : (
           <div className="issue-list">
             {issues.map((issue) => (
               <article className="issue-row" key={`${issue.call_id}:${issue.issue_type}`}>
-                <span className="issue-severity warning">{issueLabel(issue.issue_type)}</span>
+                <span className="issue-severity warning">{issueLabel(issue.issue_type, t)}</span>
                 <div>
                   <strong>{issue.call_id}</strong>
-                  <p>{issueDescriptions[issue.issue_type] ?? issue.issue_type}</p>
-                  <p>{issueDetail(issue)}</p>
+                  <p>{issueDescription(issue.issue_type, t)}</p>
+                  <p>{issueDetail(issue, t)}</p>
                 </div>
                 <span className="panel-meta">
-                  {formatInteger(issue.total_tokens)} Token
+                  {formatInteger(issue.total_tokens, numberLocale)} Token
                 </span>
               </article>
             ))}

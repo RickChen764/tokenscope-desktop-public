@@ -88,7 +88,7 @@ pnpm tauri build
 构建完成后，Windows 推荐发布产物为 NSIS 安装包：
 
 ```text
-src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.1_x64-setup.exe
+src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.2_x64-setup.exe
 ```
 
 构建带应用内更新能力的发布包：
@@ -99,8 +99,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 
 该命令会读取本机 `C:\Users\<name>\.tauri\tokenscope-desktop.key` 作为 Tauri updater 私钥，生成 NSIS 安装包、签名文件和 `latest.json`。私钥不要提交到仓库。发布 GitHub Release 时需要上传：
 
-- `TokenScope.Desktop_0.1.1_x64-setup.exe`
-- `TokenScope.Desktop_0.1.1_x64-setup.exe.sig`
+- `TokenScope.Desktop_0.1.2_x64-setup.exe`
+- `TokenScope.Desktop_0.1.2_x64-setup.exe.sig`
 - `latest.json`
 
 `v0.1.1` 是首个内置 updater 的版本，旧版用户仍需手动安装一次；之后可以在设置页使用“应用更新”检查并安装新版本。

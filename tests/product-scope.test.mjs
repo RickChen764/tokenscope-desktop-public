@@ -120,10 +120,9 @@ test("settings page exposes background auto sync settings without proxy setup", 
   assert.ok(settingsPage.includes("后台自动同步"));
   assert.ok(settingsPage.includes("启用后台自动同步"));
   assert.ok(settingsPage.includes("同步间隔"));
-  assert.ok(settingsPage.includes("15 分钟"));
-  assert.ok(settingsPage.includes("30 分钟"));
-  assert.ok(settingsPage.includes("60 分钟"));
-  assert.ok(settingsPage.includes("180 分钟"));
+  assert.ok(settingsPage.includes("SYNC_INTERVAL_VALUES"));
+  assert.ok(settingsPage.includes("[15, 30, 60, 180]"));
+  assert.ok(settingsPage.includes('t("分钟")'));
   assert.ok(settingsPage.includes("启动后立即同步"));
   assert.ok(settingsPage.includes("最近自动同步"));
   assert.ok(settingsPage.includes("下一次计划"));
@@ -368,4 +367,24 @@ test("application exposes a signed Tauri updater workflow", () => {
   assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY = Get-Content"));
   assert.ok(buildScript.includes("pnpm exec tauri build --ci"));
   assert.ok(buildScript.includes("tokenscope-desktop.key"));
+});
+
+test("application and installer support Chinese and English localization", () => {
+  const tauriConfig = JSON.parse(readProjectFile("src-tauri/tauri.conf.json"));
+  const i18nModule = readProjectFile("src/i18n/index.tsx");
+  const appShell = readProjectFile("src/app/App.tsx");
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const miniSeriesChart = readProjectFile("src/components/MiniSeriesChart.tsx");
+
+  assert.deepEqual(tauriConfig.bundle.windows.nsis.languages, ["English", "SimpChinese"]);
+  assert.equal(tauriConfig.bundle.windows.nsis.displayLanguageSelector, false);
+  assert.ok(i18nModule.includes("zh-CN"));
+  assert.ok(i18nModule.includes("en-US"));
+  assert.ok(i18nModule.includes("navigator.language"));
+  assert.ok(i18nModule.includes("localStorage"));
+  assert.ok(i18nModule.includes("TokenScopeLanguage"));
+  assert.ok(appShell.includes("useI18n"));
+  assert.ok(settingsPage.includes("language-select"));
+  assert.ok(settingsPage.includes("setLanguage"));
+  assert.ok(miniSeriesChart.includes("useI18n"));
 });

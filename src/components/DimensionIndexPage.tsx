@@ -1,4 +1,5 @@
 import type { DimensionKind, TopDimensionRow } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { TopList } from "./TopList";
 
 interface DimensionIndexPageProps {
@@ -22,16 +23,15 @@ export function DimensionIndexPage({
   sessions,
   workflows,
 }: DimensionIndexPageProps) {
+  const { t } = useI18n();
   return (
     <section className="dimension-index">
       <section className="panel dimension-intro">
         <div>
           <p className="eyebrow">Dimension Analysis</p>
-          <h2>按维度检查 Token 和调用质量</h2>
+          <h2>{t("按维度检查 Token 和调用质量")}</h2>
         </div>
-        <p>
-          从 Agent、模型、Provider、工作流、项目或会话排行进入详情，查看单一维度的趋势、关键指标和相关调用。
-        </p>
+        <p>{t("从 Agent、模型、Provider、工作流、项目或会话排行进入详情，查看单一维度的趋势、关键指标和相关调用。")}</p>
       </section>
 
       <section className="dimension-list-grid">
@@ -47,7 +47,7 @@ export function DimensionIndexPage({
           kind="model"
           onRowClick={(value) => onOpenDetail("model", value)}
           rows={models}
-          title="模型"
+          title={t("模型")}
         />
         <TopList
           isLoading={isLoading}
@@ -61,21 +61,21 @@ export function DimensionIndexPage({
           kind="workflow"
           onRowClick={(value) => onOpenDetail("workflow", value)}
           rows={workflows}
-          title="工作流"
+          title={t("工作流")}
         />
         <TopList
           isLoading={isLoading}
           kind="project"
           onRowClick={(value) => onOpenDetail("project", value)}
           rows={projects}
-          title="项目"
+          title={t("项目")}
         />
         <TopList
           isLoading={isLoading}
           kind="session"
           onRowClick={(value) => onOpenDetail("session", value)}
           rows={sessions}
-          title="会话"
+          title={t("会话")}
         />
       </section>
     </section>

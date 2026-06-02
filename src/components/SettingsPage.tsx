@@ -13,6 +13,7 @@ import {
   runBackgroundSyncOnce,
   saveSyncSettings,
 } from "../services/dashboard";
+import { useI18n, type AppLanguage } from "../i18n";
 import type {
   AgentSourceSummary,
   AppUpdateInfo,
@@ -22,12 +23,7 @@ import type {
 } from "../types/dashboard";
 import { formatDateTime } from "../utils/format";
 
-const SYNC_INTERVAL_OPTIONS = [
-  { label: "15 分钟", value: 15 },
-  { label: "30 分钟", value: 30 },
-  { label: "60 分钟", value: 60 },
-  { label: "180 分钟", value: 180 },
-];
+const SYNC_INTERVAL_VALUES = [15, 30, 60, 180];
 
 const defaultSyncDraft: SyncSettingsInput = {
   enabled: false,
@@ -61,6 +57,7 @@ export function SettingsPage({
   isSyncing,
   onSeedDemoData,
 }: SettingsPageProps) {
+  const { language, setLanguage, t } = useI18n();
   const [sources, setSources] = useState<AgentSourceSummary[]>([]);
   const [isSourcesLoading, setIsSourcesLoading] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -92,7 +89,9 @@ export function SettingsPage({
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `读取本机 Agent 来源失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("读取本机 Agent 来源失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
       return null;
     } finally {
@@ -100,7 +99,7 @@ export function SettingsPage({
         setIsSourcesLoading(false);
       }
     }
-  }, []);
+  }, [t]);
 
   const loadSyncSettings = useCallback(async () => {
     setIsSyncSettingsLoading(true);
@@ -111,12 +110,14 @@ export function SettingsPage({
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `读取后台自动同步设置失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("读取后台自动同步设置失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsSyncSettingsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadSources();
@@ -130,7 +131,9 @@ export function SettingsPage({
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `生成演示数据失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("生成演示数据失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     }
   }
@@ -150,12 +153,17 @@ export function SettingsPage({
       }
       setNotice({
         kind: "success",
-        message: `本地 Agent 检测完成：发现 ${detectedCount} 个来源，其中 ${syncableCount} 个可同步。`,
+        message: t("本地 Agent 检测完成：发现 {detectedCount} 个来源，其中 {syncableCount} 个可同步。", {
+          detectedCount,
+          syncableCount,
+        }),
       });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `检测失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("检测失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsDetecting(false);
@@ -177,21 +185,30 @@ export function SettingsPage({
       if (failedResults.length > 0) {
         const errors = failedResults
           .map((result) => `${result.name}: ${result.error || result.message}`)
-          .join("；");
+          .join(language === "zh-CN" ? "；" : "; ");
         setNotice({
           kind: "error",
-          message: `同步失败：已写入 ${imported} 条，跳过 ${skipped} 条。${errors}`,
+          message: t("同步失败：已写入 {imported} 条，跳过 {skipped} 条。{errors}", {
+            errors,
+            imported,
+            skipped,
+          }),
         });
         return;
       }
       setNotice({
         kind: "success",
-        message: `同步完成：写入 ${imported} 条，跳过 ${skipped} 条。`,
+        message: t("同步完成：写入 {imported} 条，跳过 {skipped} 条。", {
+          imported,
+          skipped,
+        }),
       });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `同步失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("同步失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsImporting(false);
@@ -203,11 +220,13 @@ export function SettingsPage({
     setNotice(null);
     try {
       const path = await exportCallsCsv();
-      setNotice({ kind: "success", message: `CSV 已导出：${path}` });
+      setNotice({ kind: "success", message: t("CSV 已导出：{path}", { path }) });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `导出 CSV 失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("导出 CSV 失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsExporting(false);
@@ -229,21 +248,30 @@ export function SettingsPage({
       if (failedResults.length > 0) {
         const errors = failedResults
           .map((result) => `${result.name}: ${result.error || result.message}`)
-          .join("；");
+          .join(language === "zh-CN" ? "；" : "; ");
         setNotice({
           kind: "error",
-          message: `全量刷新失败：已写入 ${imported} 条，跳过 ${skipped} 条。${errors}`,
+          message: t("全量刷新失败：已写入 {imported} 条，跳过 {skipped} 条。{errors}", {
+            errors,
+            imported,
+            skipped,
+          }),
         });
         return;
       }
       setNotice({
         kind: "success",
-        message: `全量刷新完成：写入 ${imported} 条，跳过 ${skipped} 条。`,
+        message: t("全量刷新完成：写入 {imported} 条，跳过 {skipped} 条。", {
+          imported,
+          skipped,
+        }),
       });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `全量刷新失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("全量刷新失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsImporting(false);
@@ -261,11 +289,13 @@ export function SettingsPage({
       const settings = await saveSyncSettings(syncDraft);
       setSyncSettings(settings);
       setSyncDraft(syncDraftFromSettings(settings));
-      setNotice({ kind: "success", message: "后台自动同步设置已保存。" });
+      setNotice({ kind: "success", message: t("后台自动同步设置已保存。") });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `保存后台自动同步设置失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("保存后台自动同步设置失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsSavingSyncSettings(false);
@@ -279,12 +309,14 @@ export function SettingsPage({
       const settings = await runBackgroundSyncOnce();
       setSyncSettings(settings);
       setSyncDraft(syncDraftFromSettings(settings));
-      setNotice({ kind: "success", message: "已触发一次后台同步。" });
+      setNotice({ kind: "success", message: t("已触发一次后台同步。") });
       void loadSources({ showLoading: false });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `触发后台同步失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("触发后台同步失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsRunningBackgroundSync(false);
@@ -301,13 +333,17 @@ export function SettingsPage({
       setNotice({
         kind: "success",
         message: nextUpdateInfo.available
-          ? `发现新版本 ${nextUpdateInfo.version}，可以下载并安装。`
-          : "当前已经是最新版本。",
+          ? t("发现新版本 {version}，可以下载并安装。", {
+              version: nextUpdateInfo.version ?? "",
+            })
+          : t("当前已经是最新版本。"),
       });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `检查更新失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("检查更新失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsCheckingUpdate(false);
@@ -324,12 +360,14 @@ export function SettingsPage({
       });
       setNotice({
         kind: "success",
-        message: "更新安装程序已启动。Windows 会在安装更新时自动关闭当前应用。",
+        message: t("更新安装程序已启动。Windows 会在安装更新时自动关闭当前应用。"),
       });
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `安装更新失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("安装更新失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
       setIsInstallingUpdate(false);
     }
@@ -338,19 +376,19 @@ export function SettingsPage({
   const syncControlsDisabled =
     isSyncSettingsLoading || isSavingSyncSettings || isRunningBackgroundSync;
   const lastSyncLabel = isSyncSettingsLoading
-    ? "读取中..."
-    : formatDateTime(syncSettings?.last_sync_at ?? null);
+    ? t("读取中...")
+    : formatDateTime(syncSettings?.last_sync_at ?? null, t("无"));
   const nextSyncLabel = isSyncSettingsLoading
-    ? "读取中..."
+    ? t("读取中...")
     : syncSettings?.enabled
-      ? formatDateTime(syncSettings.next_sync_at)
-      : "未启用";
+      ? formatDateTime(syncSettings.next_sync_at, t("无"))
+      : t("未启用");
   const lastResultLabel = isSyncSettingsLoading
-    ? "读取中..."
-    : syncSettings?.last_result || "尚未执行";
+    ? t("读取中...")
+    : syncSettings?.last_result || t("尚未执行");
   const lastErrorLabel = isSyncSettingsLoading
-    ? "读取中..."
-    : syncSettings?.last_error || "无";
+    ? t("读取中...")
+    : syncSettings?.last_error || t("无");
 
   const updateProgressPercent =
     updateProgress.content_length && updateProgress.content_length > 0
@@ -362,10 +400,21 @@ export function SettingsPage({
         ? 100
         : 0;
   const updateVersionLabel = updateInfo?.available
-    ? `${updateInfo.current_version || "当前版本"} → ${updateInfo.version}`
+    ? `${updateInfo.current_version || t("当前版本")} → ${updateInfo.version}`
     : updateInfo
-      ? "当前已是最新版本"
-      : "尚未检查";
+      ? t("当前已是最新版本")
+      : t("尚未检查");
+
+  function handleLanguageChange(nextLanguage: AppLanguage) {
+    setLanguage(nextLanguage);
+    setNotice({
+      kind: "success",
+      message:
+        nextLanguage === "zh-CN"
+          ? t("界面语言已切换为中文。")
+          : "Interface language changed to English.",
+    });
+  }
 
   return (
     <section className="settings-page">
@@ -384,12 +433,32 @@ export function SettingsPage({
 
       <DeviceDatasetsPanel onNotice={setNotice} />
 
+      <section className="panel language-card">
+        <div className="panel-heading settings-heading">
+          <div>
+            <p className="eyebrow">Language</p>
+            <h2>{t("界面语言")}</h2>
+            <p>{t("跟随系统语言，中文系统默认中文，其他语言默认英文。")}</p>
+          </div>
+          <label className="language-select">
+            <span>{t("界面语言")}</span>
+            <select
+              value={language}
+              onChange={(event) => handleLanguageChange(event.target.value as AppLanguage)}
+            >
+              <option value="zh-CN">{t("中文")}</option>
+              <option value="en-US">English</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
       <section className="panel app-update-card">
         <div className="panel-heading settings-heading">
           <div>
             <p className="eyebrow">App Update</p>
-            <h2>应用更新</h2>
-            <p>通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。</p>
+            <h2>{t("应用更新")}</h2>
+            <p>{t("通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。")}</p>
           </div>
           <button
             className="primary secondary"
@@ -397,18 +466,18 @@ export function SettingsPage({
             onClick={() => void handleCheckForUpdate()}
             type="button"
           >
-            {isCheckingUpdate ? "检查中..." : "检查更新"}
+            {isCheckingUpdate ? t("检查中...") : t("检查更新")}
           </button>
         </div>
 
         <div className="detail-stat-list update-status-list">
           <div>
-            <span>更新状态</span>
+            <span>{t("更新状态")}</span>
             <strong>{updateVersionLabel}</strong>
           </div>
           <div>
-            <span>发布时间</span>
-            <strong>{formatDateTime(updateInfo?.date ?? null)}</strong>
+            <span>{t("发布时间")}</span>
+            <strong>{formatDateTime(updateInfo?.date ?? null, t("无"))}</strong>
           </div>
         </div>
 
@@ -417,10 +486,10 @@ export function SettingsPage({
         {isInstallingUpdate || updateProgress.downloaded_bytes > 0 ? (
           <div className="update-progress-block">
             <div className="update-progress-meta">
-              <span>下载进度</span>
+              <span>{t("下载进度")}</span>
               <strong>{updateProgressPercent}%</strong>
             </div>
-            <div className="update-progress-bar" aria-label="下载进度">
+            <div className="update-progress-bar" aria-label={t("下载进度")}>
               <span style={{ width: `${updateProgressPercent}%` }} />
             </div>
           </div>
@@ -433,7 +502,7 @@ export function SettingsPage({
             onClick={() => void handleInstallUpdate()}
             type="button"
           >
-            {isInstallingUpdate ? "下载并安装中..." : "下载并安装"}
+            {isInstallingUpdate ? t("下载并安装中...") : t("下载并安装")}
           </button>
         </div>
       </section>
@@ -442,8 +511,8 @@ export function SettingsPage({
         <div className="panel-heading settings-heading">
           <div>
             <p className="eyebrow">Background Sync</p>
-            <h2>后台自动同步</h2>
-            <p>按固定间隔自动同步本机 Agent 来源，也可以手动触发一次后台同步。</p>
+            <h2>{t("后台自动同步")}</h2>
+            <p>{t("按固定间隔自动同步本机 Agent 来源，也可以手动触发一次后台同步。")}</p>
           </div>
           <button
             className="primary secondary"
@@ -451,14 +520,14 @@ export function SettingsPage({
             onClick={() => void handleRunBackgroundSyncOnce()}
             type="button"
           >
-            {isRunningBackgroundSync ? "同步中..." : "立即同步一次"}
+            {isRunningBackgroundSync ? t("同步中...") : t("立即同步一次")}
           </button>
         </div>
 
         <div className="settings-form">
           <div className="sync-control-grid">
             <label className="switch-field">
-              <span>启用后台自动同步</span>
+              <span>{t("启用后台自动同步")}</span>
               <input
                 checked={syncDraft.enabled}
                 disabled={syncControlsDisabled}
@@ -469,7 +538,7 @@ export function SettingsPage({
             </label>
 
             <label className="field sync-interval-field">
-              <span>同步间隔</span>
+              <span>{t("同步间隔")}</span>
               <select
                 disabled={syncControlsDisabled}
                 value={syncDraft.interval_minutes}
@@ -477,9 +546,9 @@ export function SettingsPage({
                   updateSyncDraft("interval_minutes", Number(event.target.value))
                 }
               >
-                {SYNC_INTERVAL_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                {SYNC_INTERVAL_VALUES.map((value) => (
+                  <option key={value} value={value}>
+                    {value} {t("分钟")}
                   </option>
                 ))}
               </select>
@@ -492,25 +561,25 @@ export function SettingsPage({
                 onChange={(event) => updateSyncDraft("sync_on_startup", event.target.checked)}
                 type="checkbox"
               />
-              <span>启动后立即同步</span>
+              <span>{t("启动后立即同步")}</span>
             </label>
           </div>
 
           <div className="detail-stat-list sync-status-list">
             <div>
-              <span>最近自动同步</span>
+              <span>{t("最近自动同步")}</span>
               <strong>{lastSyncLabel}</strong>
             </div>
             <div>
-              <span>下一次计划</span>
+              <span>{t("下一次计划")}</span>
               <strong>{nextSyncLabel}</strong>
             </div>
             <div>
-              <span>最近结果</span>
+              <span>{t("最近结果")}</span>
               <strong>{lastResultLabel}</strong>
             </div>
             <div>
-              <span>最近错误</span>
+              <span>{t("最近错误")}</span>
               <strong className={syncSettings?.last_error ? "danger-text" : ""}>
                 {lastErrorLabel}
               </strong>
@@ -524,7 +593,7 @@ export function SettingsPage({
               onClick={() => void handleSaveSyncSettings()}
               type="button"
             >
-              {isSavingSyncSettings ? "保存中..." : "保存同步设置"}
+              {isSavingSyncSettings ? t("保存中...") : t("保存同步设置")}
             </button>
           </div>
         </div>
@@ -534,8 +603,8 @@ export function SettingsPage({
         <section className="panel settings-utility">
           <div>
             <p className="eyebrow">Data Tools</p>
-            <h2>数据维护</h2>
-            <p>手动同步本机数据后，可在上方查看来源路径、最近导入、最近调用和导入量。</p>
+            <h2>{t("数据维护")}</h2>
+            <p>{t("手动同步本机数据后，可在上方查看来源路径、最近导入、最近调用和导入量。")}</p>
           </div>
           <div className="utility-actions">
             <button
@@ -544,7 +613,7 @@ export function SettingsPage({
               onClick={() => void handleSeed()}
               type="button"
             >
-              {isSeedLoading ? "处理中..." : "生成演示数据"}
+              {isSeedLoading ? t("处理中...") : t("生成演示数据")}
             </button>
             <button
               className="primary secondary"
@@ -552,7 +621,7 @@ export function SettingsPage({
               onClick={() => void handleFullSync()}
               type="button"
             >
-              {isImporting || isSyncing ? "刷新中..." : "全量刷新"}
+              {isImporting || isSyncing ? t("刷新中...") : t("全量刷新")}
             </button>
             <button
               className="primary"
@@ -560,7 +629,7 @@ export function SettingsPage({
               onClick={() => void handleExport()}
               type="button"
             >
-              {isExporting ? "导出中..." : "导出 CSV"}
+              {isExporting ? t("导出中...") : t("导出 CSV")}
             </button>
           </div>
         </section>
@@ -568,21 +637,21 @@ export function SettingsPage({
         <section className="panel settings-utility">
           <div>
             <p className="eyebrow">Privacy Boundary</p>
-            <h2>统计数据范围</h2>
-            <p>当前只读取本机已有记录和导入后的统计元数据，不保存 prompt、response 或 Authorization。</p>
+            <h2>{t("统计数据范围")}</h2>
+            <p>{t("当前只读取本机已有记录和导入后的统计元数据，不保存 prompt、response 或 Authorization。")}</p>
           </div>
           <div className="detail-stat-list">
             <div>
-              <span>默认采集方式</span>
-              <strong>本机数据库读取</strong>
+              <span>{t("默认采集方式")}</span>
+              <strong>{t("本机数据库读取")}</strong>
             </div>
             <div>
-              <span>明文内容</span>
-              <strong>不保存</strong>
+              <span>{t("明文内容")}</span>
+              <strong>{t("不保存")}</strong>
             </div>
             <div>
-              <span>导出内容</span>
-              <strong>调用元数据、Token、状态</strong>
+              <span>{t("导出内容")}</span>
+              <strong>{t("调用元数据、Token、状态")}</strong>
             </div>
           </div>
         </section>

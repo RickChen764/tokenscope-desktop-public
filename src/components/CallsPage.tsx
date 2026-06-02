@@ -6,15 +6,9 @@ import type {
   LlmCallFilters,
   LlmCallPage,
 } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { getLocalDateWindow } from "../utils/date";
 import { CallsTable } from "./RecentCallsTable";
-
-const rangeLabels: Record<DashboardRange, string> = {
-  today: "今日",
-  "7d": "近 7 天",
-  "30d": "近 30 天",
-  "90d": "近 90 天",
-};
 
 const pageSizes = [10, 20, 50];
 
@@ -35,15 +29,16 @@ function emptyToNull(value: string) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function statusLabel(status: string) {
+function statusLabel(status: string, t: (message: string) => string) {
   const labels: Record<string, string> = {
-    error: "失败",
-    success: "成功",
+    error: t("失败"),
+    success: t("成功"),
   };
   return labels[status] ?? status;
 }
 
 export function CallsPage() {
+  const { t } = useI18n();
   const [range, setRange] = useState<DashboardRange>("7d");
   const [provider, setProvider] = useState("");
   const [agentId, setAgentId] = useState("");
@@ -81,7 +76,9 @@ export function CallsPage() {
       const nextPage = await listLlmCalls(filters);
       setPage(nextPage);
     } catch (err) {
-      setError(`加载调用明细失败：${err instanceof Error ? err.message : String(err)}`);
+      setError(t("加载调用明细失败：{error}", {
+        error: err instanceof Error ? err.message : String(err),
+      }));
     } finally {
       setIsLoading(false);
     }
@@ -101,7 +98,9 @@ export function CallsPage() {
         }
       } catch (err) {
         if (!ignore) {
-          setError(`加载筛选项失败：${err instanceof Error ? err.message : String(err)}`);
+          setError(t("加载筛选项失败：{error}", {
+            error: err instanceof Error ? err.message : String(err),
+          }));
         }
       }
     }
@@ -134,9 +133,11 @@ export function CallsPage() {
     setExportNotice(null);
     try {
       const path = await exportCallsCsv(filters);
-      setExportNotice(`CSV 已导出：${path}`);
+      setExportNotice(t("CSV 已导出：{path}", { path }));
     } catch (err) {
-      setError(`导出当前筛选 CSV 失败：${err instanceof Error ? err.message : String(err)}`);
+      setError(t("导出当前筛选 CSV 失败：{error}", {
+        error: err instanceof Error ? err.message : String(err),
+      }));
     } finally {
       setIsExporting(false);
     }
@@ -147,12 +148,19 @@ export function CallsPage() {
   const canGoPrevious = pageIndex > 0 && !isLoading;
   const canGoNext = filters.offset + page.rows.length < page.total && !isLoading;
 
+  const rangeLabels: Record<DashboardRange, string> = {
+    today: t("今日"),
+    "7d": t("近 7 天"),
+    "30d": t("近 30 天"),
+    "90d": t("近 90 天"),
+  };
+
   return (
     <section className="panel calls-page">
       <div className="panel-heading calls-heading">
         <div>
-          <h2>筛选结果</h2>
-          <p>按时间、来源和状态查看本地记录的调用元数据。</p>
+          <h2>{t("筛选结果")}</h2>
+          <p>{t("按时间、来源和状态查看本地记录的调用元数据。")}</p>
         </div>
         <div className="heading-actions">
           <button
@@ -161,18 +169,18 @@ export function CallsPage() {
             onClick={() => void handleExportCurrentFilters()}
             type="button"
           >
-            {isExporting ? "导出中..." : "导出当前筛选 CSV"}
+            {isExporting ? t("导出中...") : t("导出当前筛选 CSV")}
           </button>
           <button className="primary secondary" onClick={handleReset} type="button">
-            重置筛选
+            {t("重置筛选")}
           </button>
         </div>
       </div>
 
       <div className="calls-filter-bar">
         <div className="filter-control range-control">
-          <span>时间</span>
-          <div className="segmented compact-segmented" aria-label="调用日期范围">
+          <span>{t("时间")}</span>
+          <div className="segmented compact-segmented" aria-label={t("调用日期范围")}>
             {(["today", "7d", "30d", "90d"] as DashboardRange[]).map((option) => (
               <button
                 className={option === range ? "active" : ""}
@@ -189,7 +197,7 @@ export function CallsPage() {
         <label className="filter-control">
           <span>Provider</span>
           <select value={provider} onChange={(event) => resetPageAnd(setProvider, event.target.value)}>
-            <option value="">全部</option>
+            <option value="">{t("全部")}</option>
             {options.providers.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -201,7 +209,7 @@ export function CallsPage() {
         <label className="filter-control">
           <span>Agent</span>
           <select value={agentId} onChange={(event) => resetPageAnd(setAgentId, event.target.value)}>
-            <option value="">全部</option>
+            <option value="">{t("全部")}</option>
             {options.agents.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -211,9 +219,9 @@ export function CallsPage() {
         </label>
 
         <label className="filter-control">
-          <span>模型</span>
+          <span>{t("模型")}</span>
           <select value={model} onChange={(event) => resetPageAnd(setModel, event.target.value)}>
-            <option value="">全部</option>
+            <option value="">{t("全部")}</option>
             {options.models.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -223,12 +231,12 @@ export function CallsPage() {
         </label>
 
         <label className="filter-control">
-          <span>状态</span>
+          <span>{t("状态")}</span>
           <select value={status} onChange={(event) => resetPageAnd(setStatus, event.target.value)}>
-            <option value="">全部</option>
+            <option value="">{t("全部")}</option>
             {options.statuses.map((value) => (
               <option key={value} value={value}>
-                {statusLabel(value)}
+                {statusLabel(value, t)}
               </option>
             ))}
           </select>
@@ -239,7 +247,7 @@ export function CallsPage() {
       {exportNotice ? <div className="notice success inline-notice">{exportNotice}</div> : null}
 
       <CallsTable
-        emptyLabel="当前筛选条件下暂无调用记录"
+        emptyLabel={t("当前筛选条件下暂无调用记录")}
         isLoading={isLoading}
         rows={page.rows}
       />
@@ -250,7 +258,7 @@ export function CallsPage() {
         </span>
         <div className="pagination-controls">
           <label>
-            每页
+            {t("每页")}
             <select
               value={pageSize}
               onChange={(event) => {
@@ -271,7 +279,7 @@ export function CallsPage() {
             onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
             type="button"
           >
-            上一页
+            {t("上一页")}
           </button>
           <button
             className="pagination-button"
@@ -279,7 +287,7 @@ export function CallsPage() {
             onClick={() => setPageIndex((value) => value + 1)}
             type="button"
           >
-            下一页
+            {t("下一页")}
           </button>
         </div>
       </div>

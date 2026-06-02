@@ -8,6 +8,7 @@ import {
   removeExternalDataset,
 } from "../services/dashboard";
 import type { ExternalDataset } from "../types/dashboard";
+import { useI18n } from "../i18n";
 import { formatDateTime, formatInteger } from "../utils/format";
 
 interface DeviceDatasetsPanelProps {
@@ -15,6 +16,7 @@ interface DeviceDatasetsPanelProps {
 }
 
 export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
+  const { numberLocale, t } = useI18n();
   const [datasets, setDatasets] = useState<ExternalDataset[]>([]);
   const [lastExportDir, setLastExportDir] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -30,7 +32,9 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `读取设备数据失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("读取设备数据失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsLoading(false);
@@ -48,7 +52,7 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
       const selectedDir = await openDialog({
         directory: true,
         multiple: false,
-        title: "选择导出目录",
+        title: t("选择导出目录"),
       });
       if (!selectedDir || Array.isArray(selectedDir)) {
         return;
@@ -56,11 +60,13 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
 
       const path = await exportDeviceDatasetPackage(selectedDir);
       setLastExportDir(selectedDir);
-      onNotice({ kind: "success", message: `.tokenscope 数据包已导出：${path}` });
+      onNotice({ kind: "success", message: t(".tokenscope 数据包已导出：{path}", { path }) });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `导出本机数据包失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("导出本机数据包失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsExporting(false);
@@ -72,11 +78,13 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
     onNotice(null);
     try {
       const path = await openExportFolder(lastExportDir ?? undefined);
-      onNotice({ kind: "success", message: `已打开导出文件夹：${path}` });
+      onNotice({ kind: "success", message: t("已打开导出文件夹：{path}", { path }) });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `打开导出文件夹失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("打开导出文件夹失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsOpeningFolder(false);
@@ -88,9 +96,9 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
     onNotice(null);
     try {
       const selectedFile = await openDialog({
-        filters: [{ name: "TokenScope 数据包", extensions: ["tokenscope"] }],
+        filters: [{ name: t("TokenScope 数据包"), extensions: ["tokenscope"] }],
         multiple: false,
-        title: "选择 .tokenscope 数据包",
+        title: t("选择 .tokenscope 数据包"),
       });
       if (!selectedFile || Array.isArray(selectedFile)) {
         return;
@@ -101,12 +109,18 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
       await loadDatasets();
       onNotice({
         kind: "success",
-        message: `导入设备数据包完成：${result.dataset.device_name} 写入 ${result.imported} 条，跳过 ${result.skipped} 条。`,
+        message: t("导入设备数据包完成：{device} 写入 {imported} 条，跳过 {skipped} 条。", {
+          device: result.dataset.device_name,
+          imported: result.imported,
+          skipped: result.skipped,
+        }),
       });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `导入设备数据包失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("导入设备数据包失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsImporting(false);
@@ -115,7 +129,9 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
 
   async function handleRemoveDataset(dataset: ExternalDataset) {
     const confirmed = window.confirm(
-      `确认移除 ${dataset.device_name} 的导入数据？这不会影响本机数据。`,
+      t("确认移除 {device} 的导入数据？这不会影响本机数据。", {
+        device: dataset.device_name,
+      }),
     );
     if (!confirmed) {
       return;
@@ -128,12 +144,17 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
       await loadDatasets();
       onNotice({
         kind: "success",
-        message: `已移除 ${dataset.device_name} 的导入数据：${removed} 条；不会影响本机数据。`,
+        message: t("已移除 {device} 的导入数据：{removed} 条；不会影响本机数据。", {
+          device: dataset.device_name,
+          removed,
+        }),
       });
     } catch (err) {
       onNotice({
         kind: "error",
-        message: `移除设备数据失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("移除设备数据失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setRemovingId(null);
@@ -145,8 +166,8 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
       <div className="panel-heading settings-heading">
         <div>
           <p className="eyebrow">Device Packages</p>
-          <h2>多设备数据包</h2>
-          <p>用 .tokenscope 数据包合并其他电脑的统计数据；导入、更新和移除都不会影响本机数据。</p>
+          <h2>{t("多设备数据包")}</h2>
+          <p>{t("用 .tokenscope 数据包合并其他电脑的统计数据；导入、更新和移除都不会影响本机数据。")}</p>
         </div>
         <div className="heading-actions">
           <button
@@ -155,7 +176,7 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
             onClick={() => void handleOpenExportFolder()}
             type="button"
           >
-            {isOpeningFolder ? "打开中..." : "打开导出文件夹"}
+            {isOpeningFolder ? t("打开中...") : t("打开导出文件夹")}
           </button>
           <button
             className="primary secondary"
@@ -163,15 +184,15 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
             onClick={() => void handleExportPackage()}
             type="button"
           >
-            {isExporting ? "导出中..." : "导出本机数据包"}
+            {isExporting ? t("导出中...") : t("导出本机数据包")}
           </button>
         </div>
       </div>
 
       <div className="device-package-import">
         <div className="device-package-copy">
-          <strong>导入设备数据包</strong>
-          <span>从其他电脑导出的 .tokenscope 文件中选择一个导入，重复导入同一设备会刷新该设备数据。</span>
+          <strong>{t("导入设备数据包")}</strong>
+          <span>{t("从其他电脑导出的 .tokenscope 文件中选择一个导入，重复导入同一设备会刷新该设备数据。")}</span>
         </div>
         <button
           className="primary"
@@ -179,13 +200,13 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
           onClick={() => void handleImportPackage()}
           type="button"
         >
-          {isImporting ? "导入中..." : "选择并导入"}
+          {isImporting ? t("导入中...") : t("选择并导入")}
         </button>
       </div>
 
       {datasets.length === 0 ? (
         <div className="empty-state small">
-          {isLoading ? "正在读取设备数据..." : "还没有导入其他设备的数据。"}
+          {isLoading ? t("正在读取设备数据...") : t("还没有导入其他设备的数据。")}
         </div>
       ) : (
         <div className="device-dataset-list">
@@ -194,13 +215,13 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
               <div>
                 <strong>{dataset.device_name}</strong>
                 <p>
-                  最近更新 {formatDateTime(dataset.updated_at)} · 来源{" "}
-                  {dataset.source_path || "未知"}
+                  {t("最近更新")} {formatDateTime(dataset.updated_at, t("无"))} · {t("来源")}{" "}
+                  {dataset.source_path || t("未知")}
                 </p>
               </div>
               <div className="device-dataset-stats">
-                <span>{formatInteger(dataset.calls)} 次调用</span>
-                <span>{formatInteger(dataset.total_tokens)} Token</span>
+                <span>{formatInteger(dataset.calls, numberLocale)} {t("次调用")}</span>
+                <span>{formatInteger(dataset.total_tokens, numberLocale)} Token</span>
               </div>
               <button
                 className="pagination-button danger-button"
@@ -208,7 +229,7 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
                 onClick={() => void handleRemoveDataset(dataset)}
                 type="button"
               >
-                {removingId === dataset.id ? "移除中..." : "移除"}
+                {removingId === dataset.id ? t("移除中...") : t("移除")}
               </button>
             </div>
           ))}

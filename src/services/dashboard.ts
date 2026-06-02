@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
+import { translateRuntime as tr } from "../i18n";
 import type {
   AgentImportResult,
   AgentSourceSummary,
@@ -56,50 +57,55 @@ const emptySummary: DashboardSummary = {
   top_model: null,
 };
 
-const browserAgentFallback: LocalAgentStatus[] = [
-  {
-    id: "codex",
-    name: "Codex",
-    detected: false,
-    import_supported: true,
-    source_path: null,
-    message: "需要在 Tauri 桌面运行时中检测。",
-  },
-  {
-    id: "hermes",
-    name: "Hermes",
-    detected: false,
-    import_supported: true,
-    source_path: null,
-    message: "需要在 Tauri 桌面运行时中检测。",
-  },
-  {
-    id: "opencode",
-    name: "opencode",
-    detected: false,
-    import_supported: true,
-    source_path: null,
-    message: "需要在 Tauri 桌面运行时中检测。",
-  },
-  {
-    id: "claude-code",
-    name: "Claude Code",
-    detected: false,
-    import_supported: true,
-    source_path: null,
-    message: "需要在 Tauri 桌面运行时中检测。",
-  },
-];
+function browserAgentFallback(): LocalAgentStatus[] {
+  const message = tr("需要在 Tauri 桌面运行时中检测。");
+  return [
+    {
+      id: "codex",
+      name: "Codex",
+      detected: false,
+      import_supported: true,
+      source_path: null,
+      message,
+    },
+    {
+      id: "hermes",
+      name: "Hermes",
+      detected: false,
+      import_supported: true,
+      source_path: null,
+      message,
+    },
+    {
+      id: "opencode",
+      name: "opencode",
+      detected: false,
+      import_supported: true,
+      source_path: null,
+      message,
+    },
+    {
+      id: "claude-code",
+      name: "Claude Code",
+      detected: false,
+      import_supported: true,
+      source_path: null,
+      message,
+    },
+  ];
+}
 
-const browserAgentSourceFallback: AgentSourceSummary[] = browserAgentFallback.map((agent) => ({
-  ...agent,
-  imported_calls: 0,
-  total_tokens: 0,
-  estimated_cost_usd: 0,
-  cost_currency: "USD",
-  last_imported_at: null,
-  last_call_at: null,
-}));
+function browserAgentSourceFallback(): AgentSourceSummary[] {
+  return browserAgentFallback().map((agent) => ({
+    ...agent,
+    imported_calls: 0,
+    total_tokens: 0,
+    estimated_cost_usd: 0,
+    cost_currency: "USD",
+    last_imported_at: null,
+    last_call_at: null,
+  }));
+}
 
 const emptyCallPage: LlmCallPage = {
   rows: [],
@@ -119,15 +125,17 @@ const emptyDataHealthSummary: DataHealthSummary = {
   issues: [],
 };
 
-const defaultSyncSettings: SyncSettings = {
-  enabled: false,
-  interval_minutes: 30,
-  sync_on_startup: true,
-  last_sync_at: null,
-  next_sync_at: null,
-  last_result: "浏览器预览环境未启用后台同步。",
-  last_error: null,
-};
+function defaultSyncSettings(): SyncSettings {
+  return {
+    enabled: false,
+    interval_minutes: 30,
+    sync_on_startup: true,
+    last_sync_at: null,
+    next_sync_at: null,
+    last_result: tr("浏览器预览环境未启用后台同步。"),
+    last_error: null,
+  };
+}
 
 function isDesktopRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -135,7 +143,11 @@ function isDesktopRuntime() {
 
 function requireDesktopRuntime(action: string) {
   if (!isDesktopRuntime()) {
-    throw new Error(`${action}需要在 Tauri 桌面运行时中执行。`);
+    throw new Error(
+      tr("{action}需要在 Tauri 桌面运行时中执行。", {
+        action: tr(action),
+      }),
+    );
   }
 }
 
@@ -333,12 +345,12 @@ export async function runCustomImporter(id: string) {
 }
 
 export function getSyncSettings() {
-  return invokeOrFallback<SyncSettings>("get_sync_settings", {}, defaultSyncSettings);
+  return invokeOrFallback<SyncSettings>("get_sync_settings", {}, defaultSyncSettings());
 }
 
 export async function saveSyncSettings(settings: SyncSettingsInput) {
   if (!isDesktopRuntime()) {
-    return { ...defaultSyncSettings, ...settings };
+    return { ...defaultSyncSettings(), ...settings };
   }
 
   return invoke<SyncSettings>("save_sync_settings", { input: settings });
@@ -347,8 +359,8 @@ export async function saveSyncSettings(settings: SyncSettingsInput) {
 export async function runBackgroundSyncOnce() {
   if (!isDesktopRuntime()) {
     return {
-      ...defaultSyncSettings,
-      last_result: "浏览器预览环境已跳过后台同步。",
+      ...defaultSyncSettings(),
+      last_result: tr("浏览器预览环境已跳过后台同步。"),
     };
   }
 
@@ -372,7 +384,7 @@ export async function checkForAppUpdate() {
       current_version: null,
       version: null,
       date: null,
-      body: "浏览器预览环境无法检查应用更新。",
+      body: tr("浏览器预览环境无法检查应用更新。"),
     };
   }
 
@@ -386,7 +398,7 @@ export async function installPendingAppUpdate(
   requireDesktopRuntime("安装应用更新");
 
   if (!pendingAppUpdate) {
-    throw new Error("没有可安装的待处理更新，请先检查更新。");
+    throw new Error(tr("没有可安装的待处理更新，请先检查更新。"));
   }
 
   let downloadedBytes = 0;
@@ -414,14 +426,14 @@ export async function installPendingAppUpdate(
 }
 
 export function detectLocalAgents() {
-  return invokeOrFallback<LocalAgentStatus[]>("detect_local_agents", {}, browserAgentFallback);
+  return invokeOrFallback<LocalAgentStatus[]>("detect_local_agents", {}, browserAgentFallback());
 }
 
 export function listAgentSources() {
   return invokeOrFallback<AgentSourceSummary[]>(
     "list_agent_sources",
     {},
-    browserAgentSourceFallback,
+    browserAgentSourceFallback(),
   );
 }
 

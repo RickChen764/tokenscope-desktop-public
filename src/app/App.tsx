@@ -8,6 +8,7 @@ import { ReportsPage } from "../components/ReportsPage";
 import { SettingsPage } from "../components/SettingsPage";
 import { SummaryCards } from "../components/SummaryCards";
 import { TopList } from "../components/TopList";
+import { useI18n } from "../i18n";
 import {
   clearDemoData,
   getDailyUsageSeries,
@@ -47,19 +48,7 @@ const emptySummary: DashboardSummary = {
   top_model: null,
 };
 
-const rangeLabels: Record<DashboardRange, string> = {
-  today: "今日",
-  "7d": "近 7 天",
-  "30d": "近 30 天",
-  "90d": "近 90 天",
-};
-
 type DashboardRangeMode = DashboardRange | "custom";
-
-const rangeModeLabels: Record<DashboardRangeMode, string> = {
-  ...rangeLabels,
-  custom: "自定义",
-};
 
 type DashboardView =
   | "overview"
@@ -69,25 +58,8 @@ type DashboardView =
   | "calls"
   | "settings";
 
-const navItems: Array<{ id: DashboardView; label: string }> = [
-  { id: "overview", label: "概览" },
-  { id: "health", label: "健康" },
-  { id: "reports", label: "报表" },
-  { id: "dimensions", label: "分析" },
-  { id: "calls", label: "调用" },
-  { id: "settings", label: "设置" },
-];
-
-const viewTitles: Record<DashboardView, string> = {
-  overview: "用量仪表盘",
-  health: "数据健康",
-  reports: "报表导出",
-  dimensions: "维度分析",
-  calls: "调用明细",
-  settings: "偏好设置",
-};
-
 export function App() {
+  const { t } = useI18n();
   const [view, setView] = useState<DashboardView>("overview");
   const [range, setRange] = useState<DashboardRangeMode>("30d");
   const initialCustomWindow = useMemo(() => getLocalDateWindow("90d"), []);
@@ -126,7 +98,10 @@ export function App() {
       }
 
       if (!isDateWindowValid) {
-        setNotice({ kind: "error", message: "请选择完整日期区间，且起始日期不能晚于结束日期。" });
+        setNotice({
+          kind: "error",
+          message: t("请选择完整日期区间，且起始日期不能晚于结束日期。"),
+        });
         setIsLoading(false);
         return false;
       }
@@ -167,14 +142,16 @@ export function App() {
       } catch (err) {
         setNotice({
           kind: "error",
-          message: `加载仪表盘失败：${err instanceof Error ? err.message : String(err)}`,
+          message: t("加载仪表盘失败：{error}", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
         });
         return false;
       } finally {
         setIsLoading(false);
       }
     },
-    [dateWindow.from, dateWindow.to, isDateWindowValid],
+    [dateWindow.from, dateWindow.to, isDateWindowValid, t],
   );
 
   useEffect(() => {
@@ -195,16 +172,24 @@ export function App() {
       setDimensionDetail(null);
       if (refreshed) {
         const cleanupText =
-          clearedDemoRows > 0 ? `，清理演示数据 ${clearedDemoRows} 条` : "";
+          clearedDemoRows > 0
+            ? t("，清理演示数据 {count} 条", { count: clearedDemoRows })
+            : "";
         setNotice({
           kind: "success",
-          message: `本机数据已同步：写入 ${imported} 条，跳过 ${skipped} 条${cleanupText}。`,
+          message: t("本机数据已同步：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。", {
+            cleanupText,
+            imported,
+            skipped,
+          }),
         });
       }
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `同步本机数据失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("同步本机数据失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
     } finally {
       setIsSyncing(false);
@@ -218,12 +203,14 @@ export function App() {
       await seedDemoData();
       const refreshed = await loadDashboard({ clearNotice: false });
       if (refreshed) {
-        setNotice({ kind: "success", message: "演示数据已生成，仪表盘已刷新。" });
+        setNotice({ kind: "success", message: t("演示数据已生成，仪表盘已刷新。") });
       }
     } catch (err) {
       setNotice({
         kind: "error",
-        message: `生成演示数据失败：${err instanceof Error ? err.message : String(err)}`,
+        message: t("生成演示数据失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       });
       setIsLoading(false);
     }
@@ -241,13 +228,39 @@ export function App() {
     }
   }
 
+  const rangeLabels: Record<DashboardRange, string> = {
+    today: t("今日"),
+    "7d": t("近 7 天"),
+    "30d": t("近 30 天"),
+    "90d": t("近 90 天"),
+  };
+  const rangeModeLabels: Record<DashboardRangeMode, string> = {
+    ...rangeLabels,
+    custom: t("自定义"),
+  };
+  const navItems: Array<{ id: DashboardView; label: string }> = [
+    { id: "overview", label: t("概览") },
+    { id: "health", label: t("健康") },
+    { id: "reports", label: t("报表") },
+    { id: "dimensions", label: t("分析") },
+    { id: "calls", label: t("调用") },
+    { id: "settings", label: t("设置") },
+  ];
+  const viewTitles: Record<DashboardView, string> = {
+    overview: t("用量仪表盘"),
+    health: t("数据健康"),
+    reports: t("报表导出"),
+    dimensions: t("维度分析"),
+    calls: t("调用明细"),
+    settings: t("偏好设置"),
+  };
   const showRangeSelector = view === "overview";
   const activeTitle =
-    view === "dimensions" && dimensionDetail ? "维度详情" : viewTitles[view];
+    view === "dimensions" && dimensionDetail ? t("维度详情") : viewTitles[view];
 
   return (
     <main className="app-frame">
-      <aside className="side-rail" aria-label="主导航">
+      <aside className="side-rail" aria-label={t("主导航")}>
         <div className="rail-logo">TS</div>
         <nav className="rail-nav">
           {navItems.map((item) => (
@@ -276,11 +289,11 @@ export function App() {
               onClick={() => void handleSyncLocalData()}
               type="button"
             >
-              {isSyncing ? "同步中..." : "同步本机数据"}
+              {isSyncing ? t("同步中...") : t("同步本机数据")}
             </button>
             {showRangeSelector ? (
               <div className="range-control-group">
-                <div className="segmented range-segmented" aria-label="日期范围">
+                <div className="segmented range-segmented" aria-label={t("日期范围")}>
                   {(["today", "7d", "30d", "90d", "custom"] as DashboardRangeMode[]).map(
                     (option) => (
                       <button
@@ -295,9 +308,9 @@ export function App() {
                   )}
                 </div>
                 {range === "custom" ? (
-                  <div className="date-range-picker" aria-label="自定义日期范围">
+                  <div className="date-range-picker" aria-label={t("自定义日期范围")}>
                     <label>
-                      <span>开始</span>
+                      <span>{t("开始")}</span>
                       <input
                         max={customTo}
                         onChange={(event) => setCustomFrom(event.target.value)}
@@ -307,7 +320,7 @@ export function App() {
                       />
                     </label>
                     <label>
-                      <span>结束</span>
+                      <span>{t("结束")}</span>
                       <input
                         min={customFrom}
                         onChange={(event) => setCustomTo(event.target.value)}
@@ -329,53 +342,53 @@ export function App() {
           <>
             <SummaryCards isLoading={isLoading} summary={summary} />
 
-            <section className="overview-focus" aria-label="每日用量趋势">
+            <section className="overview-focus" aria-label={t("每日用量趋势")}>
               <MiniSeriesChart agentPoints={agentSeries} isLoading={isLoading} points={series} />
             </section>
 
-            <section className="overview-secondary" aria-label="排行分析">
+            <section className="overview-secondary" aria-label={t("排行分析")}>
               <div className="top-lists">
                 <TopList
                   isLoading={isLoading}
                   kind="agent"
                   onRowClick={(value) => openDimensionDetail("agent", value)}
                   rows={topAgentRows}
-                  title="Agent 排行"
+                  title={t("Agent 排行")}
                 />
                 <TopList
                   isLoading={isLoading}
                   kind="model"
                   onRowClick={(value) => openDimensionDetail("model", value)}
                   rows={models}
-                  title="模型排行"
+                  title={t("模型排行")}
                 />
                 <TopList
                   isLoading={isLoading}
                   kind="provider"
                   onRowClick={(value) => openDimensionDetail("provider", value)}
                   rows={providers}
-                  title="Provider 排行"
+                  title={t("Provider 排行")}
                 />
                 <TopList
                   isLoading={isLoading}
                   kind="workflow"
                   onRowClick={(value) => openDimensionDetail("workflow", value)}
                   rows={workflows}
-                  title="工作流排行"
+                  title={t("工作流排行")}
                 />
                 <TopList
                   isLoading={isLoading}
                   kind="project"
                   onRowClick={(value) => openDimensionDetail("project", value)}
                   rows={projects}
-                  title="项目排行"
+                  title={t("项目排行")}
                 />
                 <TopList
                   isLoading={isLoading}
                   kind="session"
                   onRowClick={(value) => openDimensionDetail("session", value)}
                   rows={sessions}
-                  title="会话排行"
+                  title={t("会话排行")}
                 />
               </div>
             </section>
