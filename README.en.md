@@ -85,10 +85,10 @@ Build the desktop application:
 pnpm tauri build
 ```
 
-On Windows, the built executable is usually located at:
+On Windows, the recommended release artifact is the NSIS installer:
 
 ```text
-src-tauri/target/release/tokenscope-desktop.exe
+src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.0_x64-setup.exe
 ```
 
 ## Checks

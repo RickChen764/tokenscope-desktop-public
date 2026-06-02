@@ -85,10 +85,10 @@ pnpm build
 pnpm tauri build
 ```
 
-构建完成后，Windows 可执行文件通常位于：
+构建完成后，Windows 推荐发布产物为 NSIS 安装包：
 
 ```text
-src-tauri/target/release/tokenscope-desktop.exe
+src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.0_x64-setup.exe
 ```
 
 ## 检查命令

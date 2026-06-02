@@ -1,5 +1,13 @@
 # 变更日志
 
+## 2026-06-02
+
+### Windows 安装包发布
+
+- Windows release 打包方式从裸 `tokenscope-desktop.exe` 调整为 NSIS 安装包，主发布产物位于 `src-tauri/target/release/bundle/nsis/TokenScope Desktop_0.1.0_x64-setup.exe`。
+- Tauri `bundle.active` 改为启用，并将 `bundle.targets` 收敛为 `["nsis"]`，为后续接入 Tauri updater 和签名更新包打基础。
+- 新增产品范围测试，确保后续 release 配置不会退回只发布裸 exe 的状态。
+
 ## 2026-06-01
 
 ### 排行列表溢出修正

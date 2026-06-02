@@ -306,3 +306,12 @@ test("windows release binary is configured without a console window", () => {
   assert.ok(mainEntrypoint.includes("windows_subsystem = \"windows\""));
   assert.ok(mainEntrypoint.includes("not(debug_assertions)"));
 });
+
+test("release packaging uses a Windows installer instead of a bare executable only", () => {
+  const tauriConfig = JSON.parse(readProjectFile("src-tauri/tauri.conf.json"));
+
+  assert.equal(tauriConfig.bundle.active, true);
+  assert.deepEqual(tauriConfig.bundle.targets, ["nsis"]);
+  assert.equal(tauriConfig.bundle.windows.nsis.installerIcon, "icons/icon.ico");
+  assert.equal(tauriConfig.bundle.windows.nsis.uninstallerIcon, "icons/icon.ico");
+});
