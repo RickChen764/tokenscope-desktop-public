@@ -299,3 +299,10 @@ test("settings page supports device dataset packages for multi-device merge", ()
   assert.ok(settingsCommands.includes("std::env::temp_dir()"));
   assert.ok(settingsCommands.includes("export_dir: Option<String>"));
 });
+
+test("windows release binary is configured without a console window", () => {
+  const mainEntrypoint = readProjectFile("src-tauri/src/main.rs");
+
+  assert.ok(mainEntrypoint.includes("windows_subsystem = \"windows\""));
+  assert.ok(mainEntrypoint.includes("not(debug_assertions)"));
+});
