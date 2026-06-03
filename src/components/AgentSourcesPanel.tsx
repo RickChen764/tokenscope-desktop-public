@@ -123,7 +123,9 @@ export function AgentSourcesPanel({
                 <p className="source-message">{source.message}</p>
                 <div className="source-path">
                   <span>{t("来源路径")}</span>
-                  <code>{source.source_path ?? t("未发现本地数据库路径")}</code>
+                  <code title={source.source_path ?? t("未发现本地数据库路径")}>
+                    {source.source_path ?? t("未发现本地数据库路径")}
+                  </code>
                 </div>
               </div>
 

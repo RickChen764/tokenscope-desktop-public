@@ -20,9 +20,11 @@ import {
   getTopSessions,
   getTopWorkflows,
   importDetectedAgents,
+  listAgentSources,
   seedDemoData,
 } from "../services/dashboard";
 import type {
+  AgentSourceSummary,
   DashboardRange,
   DashboardSummary,
   DailyUsagePoint,
@@ -30,6 +32,7 @@ import type {
   TopDimensionRow,
 } from "../types/dashboard";
 import { getLocalDateWindow } from "../utils/date";
+import { formatDateTime, formatInteger } from "../utils/format";
 
 const emptySummary: DashboardSummary = {
   total_tokens: 0,
@@ -59,7 +62,7 @@ type DashboardView =
   | "settings";
 
 export function App() {
-  const { t } = useI18n();
+  const { numberLocale, t } = useI18n();
   const [view, setView] = useState<DashboardView>("overview");
   const [range, setRange] = useState<DashboardRangeMode>("30d");
   const initialCustomWindow = useMemo(() => getLocalDateWindow("90d"), []);
@@ -74,11 +77,13 @@ export function App() {
   const [workflows, setWorkflows] = useState<TopDimensionRow[]>([]);
   const [projects, setProjects] = useState<TopDimensionRow[]>([]);
   const [sessions, setSessions] = useState<TopDimensionRow[]>([]);
+  const [agentSources, setAgentSources] = useState<AgentSourceSummary[]>([]);
   const [dimensionDetail, setDimensionDetail] = useState<{
     kind: DimensionKind;
     value: string;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSourceStatusLoading, setIsSourceStatusLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [notice, setNotice] = useState<{ kind: "error" | "success"; message: string } | null>(null);
@@ -154,9 +159,23 @@ export function App() {
     [dateWindow.from, dateWindow.to, isDateWindowValid, t],
   );
 
+  const loadAgentSourceStatus = useCallback(async () => {
+    setIsSourceStatusLoading(true);
+    try {
+      const sources = await listAgentSources();
+      setAgentSources(sources);
+    } finally {
+      setIsSourceStatusLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    void loadAgentSourceStatus();
+  }, [loadAgentSourceStatus]);
 
   async function handleSyncLocalData() {
     setIsSyncing(true);
@@ -167,6 +186,7 @@ export function App() {
       const imported = results.reduce((total, result) => total + result.imported, 0);
       const skipped = results.reduce((total, result) => total + result.skipped, 0);
       const refreshed = await loadDashboard({ clearNotice: false });
+      await loadAgentSourceStatus();
       setSyncVersion((value) => value + 1);
       setView("overview");
       setDimensionDetail(null);
@@ -228,6 +248,11 @@ export function App() {
     }
   }
 
+  function openDimensionIndex() {
+    setDimensionDetail(null);
+    setView("dimensions");
+  }
+
   const rangeLabels: Record<DashboardRange, string> = {
     today: t("今日"),
     "7d": t("近 7 天"),
@@ -257,6 +282,20 @@ export function App() {
   const showRangeSelector = view === "overview";
   const activeTitle =
     view === "dimensions" && dimensionDetail ? t("维度详情") : viewTitles[view];
+  const latestImportedAt = latestDateTime(agentSources.map((source) => source.last_imported_at));
+  const localImportedRows = agentSources.reduce((total, source) => total + source.imported_calls, 0);
+  const hasSyncedData = localImportedRows > 0 || Boolean(latestImportedAt);
+  const syncStatusLabel = isSourceStatusLoading
+    ? t("读取中...")
+    : hasSyncedData
+      ? t("已同步")
+      : t("未同步");
+  const lastSyncLabel = isSourceStatusLoading
+    ? t("读取中...")
+    : formatRelativeDateTime(latestImportedAt, t);
+  const localRowsLabel = isSourceStatusLoading
+    ? t("读取中...")
+    : formatInteger(localImportedRows, numberLocale);
 
   return (
     <main className="app-frame">
@@ -274,12 +313,44 @@ export function App() {
             </button>
           ))}
         </nav>
+
+        <section
+          className={`sync-status-rail ${hasSyncedData ? "synced" : "idle"}`}
+          aria-busy={isSourceStatusLoading}
+          aria-describedby="sync-status-popover"
+          aria-label={t("同步状态")}
+          tabIndex={0}
+        >
+          <div className="rail-status-compact">
+            <i aria-hidden="true" />
+            <span>{syncStatusLabel}</span>
+            <strong>{localRowsLabel}</strong>
+          </div>
+          <div className="rail-status-popover" id="sync-status-popover" role="status">
+            <div>
+              <span>{t("同步状态")}</span>
+              <strong>
+                <i aria-hidden="true" />
+                {syncStatusLabel}
+              </strong>
+            </div>
+            <div>
+              <span>{t("最后同步")}</span>
+              <strong>{lastSyncLabel}</strong>
+            </div>
+            <div>
+              <span>{t("本机数据")}</span>
+              <strong>
+                {localRowsLabel} {t("条")}
+              </strong>
+            </div>
+          </div>
+        </section>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">TokenScope Desktop</p>
+          <div className="topbar-title">
             <h1>{activeTitle}</h1>
           </div>
           <div className="actions">
@@ -349,46 +420,64 @@ export function App() {
             <section className="overview-secondary" aria-label={t("排行分析")}>
               <div className="top-lists">
                 <TopList
+                  dimensionLabel="Agent"
+                  footerLabel={t("进入分析")}
                   isLoading={isLoading}
                   kind="agent"
+                  maxRows={5}
                   onRowClick={(value) => openDimensionDetail("agent", value)}
+                  onViewAll={openDimensionIndex}
                   rows={topAgentRows}
                   title={t("Agent 排行")}
+                  variant="overview"
                 />
                 <TopList
+                  dimensionLabel={t("模型")}
+                  footerLabel={t("进入分析")}
                   isLoading={isLoading}
                   kind="model"
+                  maxRows={5}
                   onRowClick={(value) => openDimensionDetail("model", value)}
+                  onViewAll={openDimensionIndex}
                   rows={models}
                   title={t("模型排行")}
+                  variant="overview"
                 />
                 <TopList
+                  dimensionLabel="Provider"
+                  footerLabel={t("进入分析")}
                   isLoading={isLoading}
                   kind="provider"
+                  maxRows={5}
                   onRowClick={(value) => openDimensionDetail("provider", value)}
+                  onViewAll={openDimensionIndex}
                   rows={providers}
                   title={t("Provider 排行")}
+                  variant="overview"
                 />
                 <TopList
-                  isLoading={isLoading}
-                  kind="workflow"
-                  onRowClick={(value) => openDimensionDetail("workflow", value)}
-                  rows={workflows}
-                  title={t("工作流排行")}
-                />
-                <TopList
+                  dimensionLabel={t("项目")}
+                  footerLabel={t("进入分析")}
                   isLoading={isLoading}
                   kind="project"
+                  maxRows={5}
                   onRowClick={(value) => openDimensionDetail("project", value)}
+                  onViewAll={openDimensionIndex}
                   rows={projects}
                   title={t("项目排行")}
+                  variant="overview"
                 />
                 <TopList
+                  dimensionLabel={t("会话")}
+                  footerLabel={t("进入分析")}
                   isLoading={isLoading}
                   kind="session"
+                  maxRows={5}
                   onRowClick={(value) => openDimensionDetail("session", value)}
+                  onViewAll={openDimensionIndex}
                   rows={sessions}
                   title={t("会话排行")}
+                  variant="overview"
                 />
               </div>
             </section>
@@ -433,4 +522,40 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function latestDateTime(values: Array<string | null>) {
+  const sortedValues = values.filter((value): value is string => Boolean(value)).sort();
+  return sortedValues.length > 0 ? sortedValues[sortedValues.length - 1] : null;
+}
+
+function formatRelativeDateTime(value: string | null, t: (message: string, params?: Record<string, string | number>) => string) {
+  if (!value) {
+    return t("尚未同步");
+  }
+
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return formatDateTime(value, t("无"));
+  }
+
+  const diffMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (diffMinutes < 1) {
+    return t("刚刚");
+  }
+  if (diffMinutes < 60) {
+    return t("{count} 分钟前", { count: diffMinutes });
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return t("{count} 小时前", { count: diffHours });
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays <= 7) {
+    return t("{count} 天前", { count: diffDays });
+  }
+
+  return formatDateTime(value, t("无"));
 }

@@ -79,7 +79,6 @@ export function DataHealthPage() {
       <section className="health-grid">
         <section className="panel health-hero">
           <div>
-            <p className="eyebrow">Data Health</p>
             <h2>{t("数据健康检查")}</h2>
             <p>{t("检查本地调用记录是否存在缺少模型、缺少 Token 和失败调用等问题。")}</p>
           </div>

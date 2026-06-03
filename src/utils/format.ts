@@ -4,6 +4,39 @@ export function formatInteger(value: number, locale = "zh-CN") {
   }).format(value);
 }
 
+export function formatCompactNumber(value: number, locale = "zh-CN") {
+  if (!Number.isFinite(value)) {
+    return formatInteger(0, locale);
+  }
+
+  const absValue = Math.abs(value);
+  const unit =
+    absValue >= 1_000_000_000
+      ? { divisor: 1_000_000_000, suffix: "B" }
+      : absValue >= 1_000_000
+        ? { divisor: 1_000_000, suffix: "M" }
+        : absValue >= 1_000
+          ? { divisor: 1_000, suffix: "K" }
+          : null;
+
+  if (!unit) {
+    return formatInteger(value, locale);
+  }
+
+  const scaledValue = absValue / unit.divisor;
+  const maximumFractionDigits = scaledValue >= 100 ? 0 : scaledValue >= 10 ? 1 : 2;
+  const formattedValue = new Intl.NumberFormat(locale, {
+    maximumFractionDigits,
+    minimumFractionDigits: 0,
+  }).format(scaledValue);
+
+  return `${value < 0 ? "-" : ""}${formattedValue}${unit.suffix}`;
+}
+
+export function formatCompactToken(value: number, locale = "zh-CN") {
+  return formatCompactNumber(value, locale);
+}
+
 export function formatCost(value: number, currency = "USD") {
   const normalizedCurrency = currency.trim().toUpperCase();
   if (normalizedCurrency === "MIXED") {

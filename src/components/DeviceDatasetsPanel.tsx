@@ -165,7 +165,6 @@ export function DeviceDatasetsPanel({ onNotice }: DeviceDatasetsPanelProps) {
     <section className="panel device-datasets-panel" aria-busy={isLoading}>
       <div className="panel-heading settings-heading">
         <div>
-          <p className="eyebrow">Device Packages</p>
           <h2>{t("多设备数据包")}</h2>
           <p>{t("用 .tokenscope 数据包合并其他电脑的统计数据；导入、更新和移除都不会影响本机数据。")}</p>
         </div>

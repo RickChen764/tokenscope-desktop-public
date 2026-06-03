@@ -420,223 +420,250 @@ export function SettingsPage({
     <section className="settings-page">
       {notice ? <div className={`notice ${notice.kind} inline-notice`}>{notice.message}</div> : null}
 
-      <AgentSourcesPanel
-        isDetecting={isDetecting}
-        isImporting={isImporting || isSyncing}
-        isLoading={isSourcesLoading}
-        onDetect={() => void handleDetect()}
-        onImport={() => void handleSync()}
-        sources={sources}
-      />
-
-      <CustomImportersPanel onNotice={setNotice} />
-
-      <DeviceDatasetsPanel onNotice={setNotice} />
-
-      <section className="panel language-card">
-        <div className="panel-heading settings-heading">
+      <section className="settings-section data-sync-section">
+        <div className="settings-section-heading">
           <div>
-            <p className="eyebrow">Language</p>
-            <h2>{t("界面语言")}</h2>
-            <p>{t("跟随系统语言，中文系统默认中文，其他语言默认英文。")}</p>
-          </div>
-          <label className="language-select">
-            <span>{t("界面语言")}</span>
-            <select
-              value={language}
-              onChange={(event) => handleLanguageChange(event.target.value as AppLanguage)}
-            >
-              <option value="zh-CN">{t("中文")}</option>
-              <option value="en-US">English</option>
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <section className="panel app-update-card">
-        <div className="panel-heading settings-heading">
-          <div>
-            <p className="eyebrow">App Update</p>
-            <h2>{t("应用更新")}</h2>
-            <p>{t("通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。")}</p>
-          </div>
-          <button
-            className="primary secondary"
-            disabled={isCheckingUpdate || isInstallingUpdate}
-            onClick={() => void handleCheckForUpdate()}
-            type="button"
-          >
-            {isCheckingUpdate ? t("检查中...") : t("检查更新")}
-          </button>
-        </div>
-
-        <div className="detail-stat-list update-status-list">
-          <div>
-            <span>{t("更新状态")}</span>
-            <strong>{updateVersionLabel}</strong>
-          </div>
-          <div>
-            <span>{t("发布时间")}</span>
-            <strong>{formatDateTime(updateInfo?.date ?? null, t("无"))}</strong>
+            <h2>{t("数据同步")}</h2>
+            <p>{t("管理本机 Agent 来源、增量同步、后台同步和必要时的全量刷新。")}</p>
           </div>
         </div>
 
-        {updateInfo?.body ? <p className="update-notes">{updateInfo.body}</p> : null}
+        <AgentSourcesPanel
+          isDetecting={isDetecting}
+          isImporting={isImporting || isSyncing}
+          isLoading={isSourcesLoading}
+          onDetect={() => void handleDetect()}
+          onImport={() => void handleSync()}
+          sources={sources}
+        />
 
-        {isInstallingUpdate || updateProgress.downloaded_bytes > 0 ? (
-          <div className="update-progress-block">
-            <div className="update-progress-meta">
-              <span>{t("下载进度")}</span>
-              <strong>{updateProgressPercent}%</strong>
-            </div>
-            <div className="update-progress-bar" aria-label={t("下载进度")}>
-              <span style={{ width: `${updateProgressPercent}%` }} />
-            </div>
-          </div>
-        ) : null}
-
-        <div className="form-actions">
-          <button
-            className="primary"
-            disabled={!updateInfo?.available || isCheckingUpdate || isInstallingUpdate}
-            onClick={() => void handleInstallUpdate()}
-            type="button"
-          >
-            {isInstallingUpdate ? t("下载并安装中...") : t("下载并安装")}
-          </button>
-        </div>
-      </section>
-
-      <section className="panel sync-settings-card" aria-busy={isSyncSettingsLoading}>
-        <div className="panel-heading settings-heading">
-          <div>
-            <p className="eyebrow">Background Sync</p>
-            <h2>{t("后台自动同步")}</h2>
-            <p>{t("按固定间隔自动同步本机 Agent 来源，也可以手动触发一次后台同步。")}</p>
-          </div>
-          <button
-            className="primary secondary"
-            disabled={syncControlsDisabled}
-            onClick={() => void handleRunBackgroundSyncOnce()}
-            type="button"
-          >
-            {isRunningBackgroundSync ? t("同步中...") : t("立即同步一次")}
-          </button>
-        </div>
-
-        <div className="settings-form">
-          <div className="sync-control-grid">
-            <label className="switch-field">
-              <span>{t("启用后台自动同步")}</span>
-              <input
-                checked={syncDraft.enabled}
+        <div className="sync-layout-grid">
+          <section className="panel sync-settings-card" aria-busy={isSyncSettingsLoading}>
+            <div className="panel-heading settings-heading">
+              <div>
+                <h2>{t("后台自动同步")}</h2>
+                <p>{t("按固定间隔自动同步本机 Agent 来源，也可以手动触发一次后台同步。")}</p>
+              </div>
+              <button
+                className="primary secondary"
                 disabled={syncControlsDisabled}
-                onChange={(event) => updateSyncDraft("enabled", event.target.checked)}
-                role="switch"
-                type="checkbox"
-              />
-            </label>
-
-            <label className="field sync-interval-field">
-              <span>{t("同步间隔")}</span>
-              <select
-                disabled={syncControlsDisabled}
-                value={syncDraft.interval_minutes}
-                onChange={(event) =>
-                  updateSyncDraft("interval_minutes", Number(event.target.value))
-                }
+                onClick={() => void handleRunBackgroundSyncOnce()}
+                type="button"
               >
-                {SYNC_INTERVAL_VALUES.map((value) => (
-                  <option key={value} value={value}>
-                    {value} {t("分钟")}
-                  </option>
-                ))}
-              </select>
-            </label>
+                {isRunningBackgroundSync ? t("同步中...") : t("立即同步一次")}
+              </button>
+            </div>
 
-            <label className="checkbox-field sync-startup-field">
-              <input
-                checked={syncDraft.sync_on_startup}
-                disabled={syncControlsDisabled}
-                onChange={(event) => updateSyncDraft("sync_on_startup", event.target.checked)}
-                type="checkbox"
-              />
-              <span>{t("启动后立即同步")}</span>
-            </label>
-          </div>
+            <div className="settings-form">
+              <div className="sync-control-grid">
+                <label className="switch-field">
+                  <span>{t("启用后台自动同步")}</span>
+                  <input
+                    checked={syncDraft.enabled}
+                    disabled={syncControlsDisabled}
+                    onChange={(event) => updateSyncDraft("enabled", event.target.checked)}
+                    role="switch"
+                    type="checkbox"
+                  />
+                </label>
 
-          <div className="detail-stat-list sync-status-list">
-            <div>
-              <span>{t("最近自动同步")}</span>
-              <strong>{lastSyncLabel}</strong>
-            </div>
-            <div>
-              <span>{t("下一次计划")}</span>
-              <strong>{nextSyncLabel}</strong>
-            </div>
-            <div>
-              <span>{t("最近结果")}</span>
-              <strong>{lastResultLabel}</strong>
-            </div>
-            <div>
-              <span>{t("最近错误")}</span>
-              <strong className={syncSettings?.last_error ? "danger-text" : ""}>
-                {lastErrorLabel}
-              </strong>
-            </div>
-          </div>
+                <label className="field sync-interval-field">
+                  <span>{t("同步间隔")}</span>
+                  <select
+                    disabled={syncControlsDisabled}
+                    value={syncDraft.interval_minutes}
+                    onChange={(event) =>
+                      updateSyncDraft("interval_minutes", Number(event.target.value))
+                    }
+                  >
+                    {SYNC_INTERVAL_VALUES.map((value) => (
+                      <option key={value} value={value}>
+                        {value} {t("分钟")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-          <div className="form-actions">
-            <button
-              className="primary"
-              disabled={syncControlsDisabled}
-              onClick={() => void handleSaveSyncSettings()}
-              type="button"
-            >
-              {isSavingSyncSettings ? t("保存中...") : t("保存同步设置")}
-            </button>
-          </div>
+                <label className="checkbox-field sync-startup-field">
+                  <input
+                    checked={syncDraft.sync_on_startup}
+                    disabled={syncControlsDisabled}
+                    onChange={(event) => updateSyncDraft("sync_on_startup", event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{t("启动后立即同步")}</span>
+                </label>
+              </div>
+
+              <div className="detail-stat-list sync-status-list">
+                <div>
+                  <span>{t("最近自动同步")}</span>
+                  <strong>{lastSyncLabel}</strong>
+                </div>
+                <div>
+                  <span>{t("下一次计划")}</span>
+                  <strong>{nextSyncLabel}</strong>
+                </div>
+                <div className="sync-status-message">
+                  <span>{t("最近结果")}</span>
+                  <strong title={lastResultLabel}>{lastResultLabel}</strong>
+                </div>
+                <div className="sync-status-message">
+                  <span>{t("最近错误")}</span>
+                  <strong
+                    className={syncSettings?.last_error ? "danger-text" : ""}
+                    title={lastErrorLabel}
+                  >
+                    {lastErrorLabel}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="form-actions">
+                <button
+                  className="primary"
+                  disabled={syncControlsDisabled}
+                  onClick={() => void handleSaveSyncSettings()}
+                  type="button"
+                >
+                  {isSavingSyncSettings ? t("保存中...") : t("保存同步设置")}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel settings-utility settings-action-strip">
+            <div>
+              <h2>{t("数据维护")}</h2>
+              <p>{t("手动同步本机数据后，可在上方查看来源路径、最近导入、最近调用和导入量。")}</p>
+            </div>
+            <div className="utility-actions">
+              <button
+                className="primary secondary"
+                disabled={isSeedLoading}
+                onClick={() => void handleSeed()}
+                type="button"
+              >
+                {isSeedLoading ? t("处理中...") : t("生成演示数据")}
+              </button>
+              <button
+                className="primary secondary"
+                disabled={isImporting || isSyncing}
+                onClick={() => void handleFullSync()}
+                type="button"
+              >
+                {isImporting || isSyncing ? t("刷新中...") : t("全量刷新")}
+              </button>
+              <button
+                className="primary"
+                disabled={isExporting}
+                onClick={() => void handleExport()}
+                type="button"
+              >
+                {isExporting ? t("导出中...") : t("导出 CSV")}
+              </button>
+            </div>
+          </section>
         </div>
       </section>
 
-      <section className="settings-grid compact-grid">
-        <section className="panel settings-utility">
+      <section className="settings-section data-portability-section">
+        <div className="settings-section-heading">
           <div>
-            <p className="eyebrow">Data Tools</p>
-            <h2>{t("数据维护")}</h2>
-            <p>{t("手动同步本机数据后，可在上方查看来源路径、最近导入、最近调用和导入量。")}</p>
+            <h2>{t("数据迁移与扩展")}</h2>
+            <p>{t("导入其他设备数据，或配置只读 SQLite 自定义数据源。")}</p>
           </div>
-          <div className="utility-actions">
-            <button
-              className="primary secondary"
-              disabled={isSeedLoading}
-              onClick={() => void handleSeed()}
-              type="button"
-            >
-              {isSeedLoading ? t("处理中...") : t("生成演示数据")}
-            </button>
-            <button
-              className="primary secondary"
-              disabled={isImporting || isSyncing}
-              onClick={() => void handleFullSync()}
-              type="button"
-            >
-              {isImporting || isSyncing ? t("刷新中...") : t("全量刷新")}
-            </button>
-            <button
-              className="primary"
-              disabled={isExporting}
-              onClick={() => void handleExport()}
-              type="button"
-            >
-              {isExporting ? t("导出中...") : t("导出 CSV")}
-            </button>
+        </div>
+
+        <DeviceDatasetsPanel onNotice={setNotice} />
+
+        <CustomImportersPanel onNotice={setNotice} />
+      </section>
+
+      <section className="settings-section app-preferences-section">
+        <div className="settings-section-heading">
+          <div>
+            <h2>{t("应用设置")}</h2>
+            <p>{t("管理语言、更新和本地统计边界。")}</p>
           </div>
-        </section>
+        </div>
+
+        <div className="settings-two-column settings-app-grid">
+          <section className="panel language-card">
+            <div className="panel-heading settings-heading">
+              <div>
+                <h2>{t("界面语言")}</h2>
+                <p>{t("跟随系统语言，中文系统默认中文，其他语言默认英文。")}</p>
+              </div>
+              <label className="language-select">
+                <span>{t("界面语言")}</span>
+                <select
+                  value={language}
+                  onChange={(event) => handleLanguageChange(event.target.value as AppLanguage)}
+                >
+                  <option value="zh-CN">{t("中文")}</option>
+                  <option value="en-US">English</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="panel app-update-card">
+            <div className="panel-heading settings-heading">
+              <div>
+                <h2>{t("应用更新")}</h2>
+                <p>{t("通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。")}</p>
+              </div>
+              <button
+                className="primary secondary"
+                disabled={isCheckingUpdate || isInstallingUpdate}
+                onClick={() => void handleCheckForUpdate()}
+                type="button"
+              >
+                {isCheckingUpdate ? t("检查中...") : t("检查更新")}
+              </button>
+            </div>
+
+            <div className="detail-stat-list update-status-list">
+              <div>
+                <span>{t("更新状态")}</span>
+                <strong>{updateVersionLabel}</strong>
+              </div>
+              <div>
+                <span>{t("发布时间")}</span>
+                <strong>{formatDateTime(updateInfo?.date ?? null, t("无"))}</strong>
+              </div>
+            </div>
+
+            {updateInfo?.body ? <p className="update-notes">{updateInfo.body}</p> : null}
+
+            {isInstallingUpdate || updateProgress.downloaded_bytes > 0 ? (
+              <div className="update-progress-block">
+                <div className="update-progress-meta">
+                  <span>{t("下载进度")}</span>
+                  <strong>{updateProgressPercent}%</strong>
+                </div>
+                <div className="update-progress-bar" aria-label={t("下载进度")}>
+                  <span style={{ width: `${updateProgressPercent}%` }} />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="form-actions">
+              <button
+                className="primary"
+                disabled={!updateInfo?.available || isCheckingUpdate || isInstallingUpdate}
+                onClick={() => void handleInstallUpdate()}
+                type="button"
+              >
+                {isInstallingUpdate ? t("下载并安装中...") : t("下载并安装")}
+              </button>
+            </div>
+          </section>
+        </div>
 
         <section className="panel settings-utility">
           <div>
-            <p className="eyebrow">Privacy Boundary</p>
             <h2>{t("统计数据范围")}</h2>
             <p>{t("当前只读取本机已有记录和导入后的统计元数据，不保存 prompt、response 或 Authorization。")}</p>
           </div>

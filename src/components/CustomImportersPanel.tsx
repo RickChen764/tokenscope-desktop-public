@@ -216,7 +216,6 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
     <section className="panel custom-importers-panel">
       <div className="panel-heading settings-heading">
         <div>
-          <p className="eyebrow">Custom Sources</p>
           <h2>{t("自定义数据源")}</h2>
           <p>{t("用只读 SQLite 查询接入其他 Agent。默认只保存统计字段，不写入 prompt/response 明文。")}</p>
         </div>

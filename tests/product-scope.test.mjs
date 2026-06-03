@@ -81,6 +81,7 @@ test("cost-related UI and pricing actions are sealed from active product surface
 test("settings page exposes local agent source sync status", () => {
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
   const agentSourcesPanel = readProjectFile("src/components/AgentSourcesPanel.tsx");
+  const styles = readProjectFile("src/styles.css");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const importerRegistry = readProjectFile("src-tauri/src/importers/mod.rs");
   const claudeCodeImporter = readProjectFile("src-tauri/src/importers/claude_code.rs");
@@ -108,6 +109,14 @@ test("settings page exposes local agent source sync status", () => {
   assert.ok(agentSourcesPanel.includes("最近调用"));
   assert.ok(agentSourcesPanel.includes("导入量"));
   assert.ok(agentSourcesPanel.includes("手动同步"));
+  assert.ok(styles.includes(".source-stats"));
+  assert.ok(styles.includes("grid-template-columns: repeat(4, minmax(0, 1fr))"));
+  assert.ok(styles.includes("align-items: end"));
+  assert.ok(styles.includes(".source-stat {"));
+  assert.ok(styles.includes("justify-content: space-between"));
+  assert.ok(styles.includes("grid-template-columns: auto minmax(0, 1fr)"));
+  assert.ok(styles.includes("text-overflow: ellipsis"));
+  assert.ok(styles.includes("white-space: nowrap"));
 });
 
 test("settings page exposes background auto sync settings without proxy setup", () => {
@@ -150,6 +159,127 @@ test("settings page exposes background auto sync settings without proxy setup", 
   assert.ok(dashboardCommands.includes("mode: Option<String>"));
 });
 
+test("settings page is organized into clear grouped sections", () => {
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(settingsPage.includes("settings-section data-sync-section"));
+  assert.ok(settingsPage.includes("settings-section data-portability-section"));
+  assert.ok(settingsPage.includes("settings-section app-preferences-section"));
+  assert.ok(settingsPage.includes("settings-section-heading"));
+  assert.ok(settingsPage.includes("sync-layout-grid"));
+  assert.ok(settingsPage.includes("settings-action-strip"));
+  assert.ok(settingsPage.includes("sync-status-message"));
+  assert.ok(settingsPage.includes("title={lastResultLabel}"));
+  assert.ok(settingsPage.includes("title={lastErrorLabel}"));
+  assert.ok(settingsPage.includes("settings-two-column"));
+  assert.ok(settingsPage.includes("settings-app-grid"));
+  assert.ok(settingsPage.indexOf("AgentSourcesPanel") < settingsPage.indexOf("sync-settings-card"));
+  assert.ok(settingsPage.indexOf("<DeviceDatasetsPanel") < settingsPage.indexOf("<CustomImportersPanel"));
+  assert.ok(styles.includes(".settings-section"));
+  assert.ok(styles.includes(".settings-section-heading"));
+  assert.ok(styles.includes(".sync-layout-grid"));
+  assert.ok(styles.includes(".settings-action-strip"));
+  assert.ok(styles.includes(".sync-status-message strong"));
+  assert.ok(styles.includes("-webkit-line-clamp: 3"));
+  assert.ok(styles.includes(".settings-two-column"));
+  assert.ok(styles.includes(".settings-app-grid"));
+});
+
+test("primary page headings avoid redundant English eyebrow labels", () => {
+  const files = [
+    "src/app/App.tsx",
+    "src/components/SettingsPage.tsx",
+    "src/components/DeviceDatasetsPanel.tsx",
+    "src/components/CustomImportersPanel.tsx",
+    "src/components/DataHealthPage.tsx",
+    "src/components/DimensionIndexPage.tsx",
+    "src/components/ReportsPage.tsx",
+  ];
+  const removedLabels = [
+    "TokenScope Desktop",
+    "Data Sync",
+    "Background Sync",
+    "Data Tools",
+    "Portability & Extensions",
+    "Application",
+    "Language",
+    "App Update",
+    "Privacy Boundary",
+    "Device Packages",
+    "Custom Sources",
+    "Data Health",
+    "Dimension Analysis",
+    "Reports",
+    "Export Scope",
+  ];
+
+  for (const file of files) {
+    const source = readProjectFile(file);
+    for (const label of removedLabels) {
+      assert.equal(source.includes(`className="eyebrow">${label}`), false, `${file}: ${label}`);
+    }
+  }
+});
+
+test("visual theme is restrained and uses a VS Code style dark palette", () => {
+  const styles = readProjectFile("src/styles.css");
+  const themeStart = styles.indexOf("VS Code restrained theme");
+
+  assert.ok(themeStart > 0);
+
+  const theme = styles.slice(themeStart);
+  assert.ok(theme.includes("--app-bg: #1e1e1e"));
+  assert.ok(theme.includes("--surface: #252526"));
+  assert.ok(theme.includes("--accent: #007acc"));
+  assert.ok(theme.includes(".summary-card::before"));
+  assert.ok(theme.includes("background: #007acc"));
+  assert.ok(theme.includes(".usage-chart-main"));
+  assert.ok(theme.includes("box-shadow: none"));
+  assert.equal(theme.includes("rgb(45 212 191"), false);
+  assert.equal(theme.includes("radial-gradient"), false);
+});
+
+test("overview visual treatment keeps content but reduces card framing", () => {
+  const styles = readProjectFile("src/styles.css");
+  const themeStart = styles.indexOf("VS Code restrained theme");
+  const theme = styles.slice(themeStart);
+
+  assert.ok(theme.includes(".summary-grid"));
+  assert.ok(theme.includes("grid-template-columns: repeat(7, minmax(0, 1fr))"));
+  assert.ok(theme.includes(".summary-card:not(:last-child)"));
+  assert.ok(theme.includes("border-right: 1px solid #333333"));
+  assert.ok(theme.includes(".overview-rank-card"));
+  assert.ok(theme.includes("border: 0"));
+  assert.ok(theme.includes(".usage-chart-main"));
+  assert.ok(theme.includes("border: 0"));
+  assert.ok(theme.includes(".usage-echarts-stage"));
+  assert.ok(theme.includes(".usage-echarts"));
+  assert.ok(theme.includes(".usage-tooltip"));
+});
+
+test("non-overview pages reuse the overview report visual treatment", () => {
+  const styles = readProjectFile("src/styles.css");
+  const dimensionIndex = readProjectFile("src/components/DimensionIndexPage.tsx");
+  const pageSkinStart = styles.indexOf("Page-wide report skin");
+  const pageSkin = styles.slice(pageSkinStart);
+
+  assert.ok(pageSkinStart > 0);
+  assert.ok(pageSkin.includes(".data-health-page"));
+  assert.ok(pageSkin.includes(".reports-page"));
+  assert.ok(pageSkin.includes(".dimension-index"));
+  assert.ok(pageSkin.includes(".dimension-detail"));
+  assert.ok(pageSkin.includes(".settings-page"));
+  assert.ok(pageSkin.includes(".dimension-list-grid"));
+  assert.ok(pageSkin.includes("grid-template-columns: repeat(3, minmax(260px, 1fr))"));
+  assert.ok(pageSkin.includes(".calls-filter-bar"));
+  assert.ok(pageSkin.includes(".settings-section"));
+  assert.ok(pageSkin.includes("border-radius: 0"));
+  assert.ok(pageSkin.includes("border-left: 0"));
+  assert.ok(pageSkin.includes("border-right: 0"));
+  assert.ok(dimensionIndex.includes('variant="overview"'));
+});
+
 test("frontend date windows use local calendar dates instead of UTC ISO dates", () => {
   const files = [
     "src/app/App.tsx",
@@ -185,16 +315,15 @@ test("overview supports custom history date ranges and richer daily charts", () 
   assert.ok(chart.includes("usage-chart-main"));
   assert.ok(chart.includes("usage-chart-toolbar"));
   assert.ok(chart.includes("usage-chart-title-block"));
-  assert.ok(chart.includes("stacked-bar-segment"));
-  assert.ok(chart.includes("line-series-agent"));
-  assert.ok(chart.includes("line-series-total"));
-  assert.ok(chart.includes("usage-chart-legend"));
-  assert.ok(chart.includes("selectedLineSeriesKeys"));
-  assert.ok(chart.includes("toggleLineSeries"));
-  assert.ok(chart.includes("line-series-toggle"));
-  assert.ok(chart.includes("all-line-series-toggle"));
-  assert.ok(chart.includes("aria-pressed"));
-  assert.ok(chart.includes("line-chart-svg"));
+  assert.ok(chart.includes("echarts/core"));
+  assert.ok(chart.includes("BarChart"));
+  assert.ok(chart.includes("LineChart"));
+  assert.ok(chart.includes("LegendComponent"));
+  assert.ok(chart.includes("TooltipComponent"));
+  assert.ok(chart.includes("CanvasRenderer"));
+  assert.ok(chart.includes("axisPointer"));
+  assert.ok(chart.includes("peakBucket"));
+  assert.ok(chart.includes("usage-echarts"));
   assert.ok(chart.includes("柱状"));
   assert.ok(chart.includes("折线"));
   assert.ok(dashboardService.includes("groupBy: DimensionKind | null = null"));
@@ -220,6 +349,64 @@ test("top ranking lists constrain long labels without overflowing cards", () => 
   assert.ok(styles.includes("text-overflow: ellipsis"));
   assert.ok(styles.includes(".top-list-value"));
   assert.ok(styles.includes("white-space: nowrap"));
+});
+
+test("overview token numbers use compact labels while preserving exact hover values", () => {
+  const summaryCards = readProjectFile("src/components/SummaryCards.tsx");
+  const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
+  const topList = readProjectFile("src/components/TopList.tsx");
+
+  assert.ok(summaryCards.includes("formatCompactToken"));
+  assert.ok(summaryCards.includes("exactValue"));
+  assert.ok(summaryCards.includes("title={card.exactValue"));
+  assert.ok(chart.includes("formatCompactToken"));
+  assert.ok(chart.includes("formatTooltipValue"));
+  assert.ok(chart.includes("formatInteger(value, locale)"));
+  assert.ok(chart.includes("title={`${formatInteger(chartData.totalTokens"));
+  assert.ok(topList.includes("formatCompactToken"));
+  assert.ok(topList.includes("variant === \"overview\""));
+  assert.ok(topList.includes("title={formatInteger(row.total_tokens"));
+});
+
+test("daily chart uses an information-rich visual stage without losing scale context", () => {
+  const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(chart.includes("peakBucket"));
+  assert.ok(chart.includes("averageDailyTokens"));
+  assert.ok(chart.includes("echarts/core"));
+  assert.ok(chart.includes("BarChart"));
+  assert.ok(chart.includes("LineChart"));
+  assert.ok(chart.includes("TooltipComponent"));
+  assert.ok(chart.includes("CanvasRenderer"));
+  assert.ok(chart.includes("usage-echarts"));
+  assert.ok(chart.includes("setOption"));
+  assert.ok(styles.includes(".usage-echarts"));
+  assert.ok(styles.includes(".usage-chart-stage"));
+});
+
+test("line chart y-axis unit does not overlap the top scale label", () => {
+  const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
+
+  assert.ok(chart.includes('name: "Token"'));
+  assert.ok(chart.includes("nameGap: 16"));
+  assert.ok(chart.includes("axisLabel"));
+  assert.equal(chart.includes("lineChartSize"), false);
+  assert.equal(chart.includes("line-chart-svg"), false);
+});
+
+test("side rail sync status uses a top-layer custom popover", () => {
+  const appShell = readProjectFile("src/app/App.tsx");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(appShell.includes("rail-status-popover"));
+  assert.ok(appShell.includes("id=\"sync-status-popover\""));
+  assert.ok(appShell.includes("aria-describedby=\"sync-status-popover\""));
+  assert.equal(appShell.includes("title={syncStatusTitle}"), false);
+  assert.ok(styles.includes(".rail-status-popover"));
+  assert.ok(styles.includes("z-index: 2147483000"));
+  assert.ok(styles.includes("overflow: visible"));
+  assert.ok(styles.includes(".sync-status-rail:hover .rail-status-popover"));
 });
 
 test("settings page exposes configurable sqlite importers without proxy capture", () => {

@@ -54,7 +54,6 @@ export function ReportsPage() {
 
       <section className="panel report-export-panel">
         <div>
-          <p className="eyebrow">Reports</p>
           <h2>{t("报表导出")}</h2>
           <p>{t("导出本地已统计的调用元数据、Token 和状态，用于审计或进一步分析。")}</p>
         </div>
@@ -80,7 +79,6 @@ export function ReportsPage() {
       <section className="settings-grid compact-grid">
         <section className="panel settings-utility">
           <div>
-            <p className="eyebrow">Export Scope</p>
             <h2>{t("导出内容")}</h2>
           </div>
           <div className="detail-stat-list">
@@ -99,7 +97,6 @@ export function ReportsPage() {
 
         <section className="panel settings-utility">
           <div>
-            <p className="eyebrow">Privacy Boundary</p>
             <h2>{t("隐私边界")}</h2>
             <p>{t("导出面向统计分析，不包含明文 prompt、response 或 Authorization。")}</p>
           </div>

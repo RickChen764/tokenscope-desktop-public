@@ -28,7 +28,6 @@ export function DimensionIndexPage({
     <section className="dimension-index">
       <section className="panel dimension-intro">
         <div>
-          <p className="eyebrow">Dimension Analysis</p>
           <h2>{t("按维度检查 Token 和调用质量")}</h2>
         </div>
         <p>{t("从 Agent、模型、Provider、工作流、项目或会话排行进入详情，查看单一维度的趋势、关键指标和相关调用。")}</p>
@@ -41,6 +40,7 @@ export function DimensionIndexPage({
           onRowClick={(value) => onOpenDetail("agent", value)}
           rows={agents}
           title="Agent"
+          variant="overview"
         />
         <TopList
           isLoading={isLoading}
@@ -48,6 +48,7 @@ export function DimensionIndexPage({
           onRowClick={(value) => onOpenDetail("model", value)}
           rows={models}
           title={t("模型")}
+          variant="overview"
         />
         <TopList
           isLoading={isLoading}
@@ -55,6 +56,7 @@ export function DimensionIndexPage({
           onRowClick={(value) => onOpenDetail("provider", value)}
           rows={providers}
           title="Provider"
+          variant="overview"
         />
         <TopList
           isLoading={isLoading}
@@ -62,6 +64,7 @@ export function DimensionIndexPage({
           onRowClick={(value) => onOpenDetail("workflow", value)}
           rows={workflows}
           title={t("工作流")}
+          variant="overview"
         />
         <TopList
           isLoading={isLoading}
@@ -69,6 +72,7 @@ export function DimensionIndexPage({
           onRowClick={(value) => onOpenDetail("project", value)}
           rows={projects}
           title={t("项目")}
+          variant="overview"
         />
         <TopList
           isLoading={isLoading}
@@ -76,6 +80,7 @@ export function DimensionIndexPage({
           onRowClick={(value) => onOpenDetail("session", value)}
           rows={sessions}
           title={t("会话")}
+          variant="overview"
         />
       </section>
     </section>
