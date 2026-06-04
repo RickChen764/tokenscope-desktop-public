@@ -137,7 +137,11 @@ $latestJson = [ordered]@{
 $latestJsonText = $latestJson | ConvertTo-Json -Depth 6
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [System.IO.File]::WriteAllText($OutputPath, $latestJsonText, $utf8NoBom)
-$validatedLatestJson = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
+$validatedLatestJsonText = [System.IO.File]::ReadAllText(
+  [System.IO.Path]::GetFullPath($OutputPath),
+  [System.Text.UTF8Encoding]::new($false)
+)
+$validatedLatestJson = $validatedLatestJsonText | ConvertFrom-Json
 if ($validatedLatestJson.version -ne $Version) {
   throw "latest.json validation failed: expected version $Version"
 }
