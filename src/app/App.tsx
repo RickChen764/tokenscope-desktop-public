@@ -8,11 +8,14 @@ import { ReportsPage } from "../components/ReportsPage";
 import { SettingsPage } from "../components/SettingsPage";
 import { SummaryCards } from "../components/SummaryCards";
 import { TopList } from "../components/TopList";
+import { ToastNotice, type ToastNoticeValue } from "../components/ToastNotice";
 import { useI18n } from "../i18n";
 import {
+  APP_UPDATE_INFO_EVENT,
   clearDemoData,
   getDailyUsageSeries,
   getDashboardSummaryForDates,
+  getStoredAppUpdateInfo,
   getTopAgents,
   getTopModels,
   getTopProjects,
@@ -20,11 +23,13 @@ import {
   getTopSessions,
   getTopWorkflows,
   importDetectedAgents,
+  installPendingAppUpdate,
   listAgentSources,
   seedDemoData,
 } from "../services/dashboard";
 import type {
   AgentSourceSummary,
+  AppUpdateInfo,
   DashboardRange,
   DashboardSummary,
   DailyUsagePoint,
@@ -61,6 +66,34 @@ type DashboardView =
   | "calls"
   | "settings";
 
+function getInitialAppUpdateInfo() {
+  const storedInfo = getStoredAppUpdateInfo();
+
+  if (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost")
+  ) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mockUpdate") === "1") {
+      const now = new Date().toISOString();
+      return {
+        ...storedInfo,
+        available: true,
+        current_version: storedInfo.current_version ?? "0.1.4",
+        version: params.get("mockUpdateVersion") ?? "0.1.5",
+        date: now,
+        body:
+          "模拟更新：左侧栏会显示升级入口，悬浮后展示版本、发布时间和这段说明。此数据仅用于预览 UI，不会触发真实下载。",
+        status: "available" as const,
+        checked_at: now,
+        error: null,
+      };
+    }
+  }
+
+  return storedInfo;
+}
+
 export function App() {
   const { numberLocale, t } = useI18n();
   const [view, setView] = useState<DashboardView>("overview");
@@ -85,8 +118,10 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSourceStatusLoading, setIsSourceStatusLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo>(() => getInitialAppUpdateInfo());
+  const [isInstallingAppUpdate, setIsInstallingAppUpdate] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
-  const [notice, setNotice] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const [notice, setNotice] = useState<ToastNoticeValue | null>(null);
 
   const dateWindow = useMemo(
     () => (range === "custom" ? { from: customFrom, to: customTo } : getLocalDateWindow(range)),
@@ -176,6 +211,40 @@ export function App() {
   useEffect(() => {
     void loadAgentSourceStatus();
   }, [loadAgentSourceStatus]);
+
+  useEffect(() => {
+    function handleAppUpdateInfo(event: Event) {
+      const detail = (event as CustomEvent<AppUpdateInfo>).detail;
+      setAppUpdateInfo(detail ?? getStoredAppUpdateInfo());
+    }
+
+    window.addEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
+    return () => window.removeEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
+  }, []);
+
+  async function handleInstallAppUpdate() {
+    setIsInstallingAppUpdate(true);
+    setNotice(null);
+    setAppUpdateInfo((current) => ({ ...current, status: "downloading", error: null }));
+
+    try {
+      await installPendingAppUpdate((progress) => {
+        setAppUpdateInfo((current) => ({
+          ...current,
+          status: progress.event === "Finished" ? "installing" : "downloading",
+          error: null,
+        }));
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setAppUpdateInfo((current) => ({ ...current, status: "error", error: message }));
+      setNotice({
+        kind: "error",
+        message: t("\u5b89\u88c5\u66f4\u65b0\u5931\u8d25\uff1a{error}", { error: message }),
+      });
+      setIsInstallingAppUpdate(false);
+    }
+  }
 
   async function handleSyncLocalData() {
     setIsSyncing(true);
@@ -296,6 +365,26 @@ export function App() {
   const localRowsLabel = isSourceStatusLoading
     ? t("读取中...")
     : formatInteger(localImportedRows, numberLocale);
+  const shouldShowUpdateRail =
+    appUpdateInfo.available &&
+    ["available", "downloading", "installing", "error"].includes(appUpdateInfo.status);
+  const appUpdateStatusLabel =
+    appUpdateInfo.status === "downloading"
+      ? t("下载中...")
+      : appUpdateInfo.status === "installing"
+        ? t("安装中...")
+        : appUpdateInfo.status === "error"
+          ? t("检查失败")
+          : t("可更新");
+  const appUpdateActionLabel =
+    appUpdateInfo.status === "downloading" || appUpdateInfo.status === "installing"
+      ? t("处理中...")
+      : t("升级");
+  const appUpdateBodyLabel =
+    appUpdateInfo.error ||
+    appUpdateInfo.body ||
+    t("发现新版本，可以下载并安装。");
+  const appUpdateDateLabel = formatDateTime(appUpdateInfo.date, t("无"));
 
   return (
     <main className="app-frame">
@@ -313,6 +402,40 @@ export function App() {
             </button>
           ))}
         </nav>
+
+        {shouldShowUpdateRail ? (
+          <section
+            className={`update-status-rail ${appUpdateInfo.status}`}
+            aria-describedby="update-status-popover"
+            aria-label={t("应用更新")}
+            tabIndex={0}
+          >
+            <button
+              className="update-status-button"
+              disabled={
+                isInstallingAppUpdate ||
+                appUpdateInfo.status === "downloading" ||
+                appUpdateInfo.status === "installing"
+              }
+              onClick={() => void handleInstallAppUpdate()}
+              type="button"
+            >
+              <span>{appUpdateStatusLabel}</span>
+              <strong>{appUpdateActionLabel}</strong>
+            </button>
+            <div className="update-status-popover" id="update-status-popover" role="status">
+              <div>
+                <span>{t("可用版本")}</span>
+                <strong>{appUpdateInfo.version ?? t("可更新")}</strong>
+              </div>
+              <div>
+                <span>{t("发布时间")}</span>
+                <strong>{appUpdateDateLabel}</strong>
+              </div>
+              <p>{appUpdateBodyLabel}</p>
+            </div>
+          </section>
+        ) : null}
 
         <section
           className={`sync-status-rail ${hasSyncedData ? "synced" : "idle"}`}
@@ -407,7 +530,7 @@ export function App() {
           </div>
         </header>
 
-        {notice ? <div className={`notice ${notice.kind}`}>{notice.message}</div> : null}
+        <ToastNotice notice={notice} onClose={() => setNotice(null)} />
 
         {view === "overview" ? (
           <>

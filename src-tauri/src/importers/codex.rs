@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -93,27 +94,52 @@ pub async fn import_codex_threads_from_path_with_scope(
         .as_ref()
         .map(|timestamp| timestamp.timestamp_millis());
 
-    let rows = query_as::<_, CodexThreadRow>(
+    let thread_columns = table_columns(&source_pool, "threads").await?;
+    let created_at_ms_expr =
+        timestamp_ms_expression(&thread_columns, "created_at_ms", "created_at");
+    let updated_at_ms_expr =
+        timestamp_ms_expression(&thread_columns, "updated_at_ms", "updated_at");
+    let rollout_path_expr = optional_column_expression(&thread_columns, "rollout_path");
+    let model_provider_expr = optional_column_expression(&thread_columns, "model_provider");
+    let cwd_expr = optional_column_expression(&thread_columns, "cwd");
+    let tokens_used_expr = optional_column_expression(&thread_columns, "tokens_used");
+    let model_expr = optional_column_expression(&thread_columns, "model");
+    let filter_timestamp_expr = format!(
+        "COALESCE({updated_at_ms_expr}, {created_at_ms_expr}, 0)",
+        updated_at_ms_expr = updated_at_ms_expr,
+        created_at_ms_expr = created_at_ms_expr
+    );
+    let thread_query = format!(
         r#"
     SELECT
       id,
-      rollout_path,
-      created_at_ms,
-      updated_at_ms,
-      model_provider,
-      cwd,
-      tokens_used,
-      model
+      {rollout_path_expr} AS rollout_path,
+      {created_at_ms_expr} AS created_at_ms,
+      {updated_at_ms_expr} AS updated_at_ms,
+      {model_provider_expr} AS model_provider,
+      {cwd_expr} AS cwd,
+      {tokens_used_expr} AS tokens_used,
+      {model_expr} AS model
     FROM threads
-    WHERE tokens_used IS NOT NULL
-      AND tokens_used > 0
-      AND (?1 IS NULL OR COALESCE(updated_at_ms, created_at_ms, 0) >= ?1)
-    ORDER BY created_at_ms ASC, id ASC
+    WHERE {tokens_used_expr} IS NOT NULL
+      AND {tokens_used_expr} > 0
+      AND (?1 IS NULL OR {filter_timestamp_expr} >= ?1)
+    ORDER BY {created_at_ms_expr} ASC, id ASC
     "#,
-    )
-    .bind(since_ms)
-    .fetch_all(&source_pool)
-    .await?;
+        rollout_path_expr = rollout_path_expr,
+        created_at_ms_expr = created_at_ms_expr,
+        updated_at_ms_expr = updated_at_ms_expr,
+        model_provider_expr = model_provider_expr,
+        cwd_expr = cwd_expr,
+        tokens_used_expr = tokens_used_expr,
+        model_expr = model_expr,
+        filter_timestamp_expr = filter_timestamp_expr,
+    );
+
+    let rows = query_as::<_, CodexThreadRow>(&thread_query)
+        .bind(since_ms)
+        .fetch_all(&source_pool)
+        .await?;
     source_pool.close().await;
 
     let mut imported = 0;
@@ -167,6 +193,48 @@ pub async fn import_codex_threads_from_path_with_scope(
         skipped,
         source_path: source_path.display().to_string(),
     })
+}
+
+async fn table_columns(
+    pool: &sqlx::SqlitePool,
+    table_name: &str,
+) -> Result<HashSet<String>, sqlx::Error> {
+    let rows = query(&format!("PRAGMA table_info({table_name})"))
+        .fetch_all(pool)
+        .await?;
+
+    rows.into_iter()
+        .map(|row| row.try_get::<String, _>("name"))
+        .collect()
+}
+
+fn optional_column_expression(columns: &HashSet<String>, column_name: &str) -> String {
+    if columns.contains(column_name) {
+        column_name.to_string()
+    } else {
+        "NULL".to_string()
+    }
+}
+
+fn timestamp_ms_expression(
+    columns: &HashSet<String>,
+    ms_column_name: &str,
+    fallback_column_name: &str,
+) -> String {
+    if columns.contains(ms_column_name) {
+        return ms_column_name.to_string();
+    }
+
+    if columns.contains(fallback_column_name) {
+        return format!(
+            "CASE WHEN {column} IS NULL THEN NULL \
+             WHEN ABS({column}) >= 10000000000 THEN {column} \
+             ELSE {column} * 1000 END",
+            column = fallback_column_name
+        );
+    }
+
+    "NULL".to_string()
 }
 
 async fn has_imported(
@@ -730,6 +798,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imports_codex_threads_from_schema_without_ms_timestamp_columns() {
+        let source_path = create_codex_state_db_without_ms_columns().await;
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("target repository connects");
+        repository.migrate().await.expect("target migrations run");
+
+        let result = import_codex_threads_from_path(&repository, &source_path)
+            .await
+            .expect("codex import supports older timestamp columns");
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.skipped, 0);
+
+        let row = query(
+            r#"
+      SELECT total_tokens, model_response, date_local
+      FROM llm_call
+      WHERE id = 'codex-thread-thread_legacy'
+      "#,
+        )
+        .fetch_one(repository.pool())
+        .await
+        .expect("legacy timestamp call exists");
+
+        assert_eq!(row.get::<i64, _>("total_tokens"), 2048);
+        assert_eq!(row.get::<String, _>("model_response"), "gpt-5.3-codex");
+        assert_eq!(row.get::<String, _>("date_local"), "2026-09-21");
+    }
+
+    #[tokio::test]
     async fn codex_import_collapses_internal_roles_to_codex_agent() {
         let source_path = create_codex_state_db().await;
         let repository = TokenScopeRepository::connect_in_memory()
@@ -1142,6 +1241,66 @@ mod tests {
         .execute(&pool)
         .await
         .expect("source thread inserted");
+        pool.close().await;
+
+        path
+    }
+
+    async fn create_codex_state_db_without_ms_columns() -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("tokenscope-codex-legacy-{}.sqlite", Uuid::new_v4()));
+        let _ = fs::remove_file(&path);
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("legacy source db connects");
+
+        query(
+            r#"
+      CREATE TABLE threads (
+        id TEXT PRIMARY KEY,
+        rollout_path TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        model_provider TEXT,
+        cwd TEXT,
+        tokens_used INTEGER,
+        model TEXT
+      )
+      "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy source schema created");
+
+        query(
+            r#"
+      INSERT INTO threads (
+        id,
+        created_at,
+        updated_at,
+        model_provider,
+        cwd,
+        tokens_used,
+        model
+      ) VALUES (
+        'thread_legacy',
+        1790000000,
+        1790000300,
+        'openai',
+        'D:\Project\legacy-project',
+        2048,
+        'gpt-5.3-codex'
+      )
+      "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy source thread inserted");
         pool.close().await;
 
         path

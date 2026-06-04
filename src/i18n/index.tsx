@@ -13,6 +13,13 @@ export type AppLanguage = "zh-CN" | "en-US";
 const LANGUAGE_STORAGE_KEY = "TokenScopeLanguage";
 
 const englishMessages: Record<string, string> = {
+  "数字显示": "Number Display",
+  "控制 Token 数值在概览、图表和排行中的展示方式。":
+    "Control how Token values are displayed in overview, charts, and rankings.",
+  "缩略显示": "Compact",
+  "完整显示": "Full",
+  "数字显示已切换为缩略显示。": "Number display changed to compact.",
+  "数字显示已切换为完整显示。": "Number display changed to full.",
   "今日": "Today",
   "近 7 天": "Last 7 days",
   "近 30 天": "Last 30 days",
@@ -39,6 +46,14 @@ const englishMessages: Record<string, string> = {
   "应用设置": "Application Settings",
   "管理语言、更新和本地统计边界。":
     "Manage language, updates, and local statistics boundaries.",
+  "\u53ef\u66f4\u65b0": "Update Available",
+  "\u4e0b\u8f7d\u4e2d...": "Downloading...",
+  "\u5b89\u88c5\u4e2d...": "Installing...",
+  "\u68c0\u67e5\u5931\u8d25": "Check Failed",
+  "\u9884\u89c8\u73af\u5883": "Preview Environment",
+  "\u5df2\u662f\u6700\u65b0\u7248\u672c": "Already Latest",
+  "\u53ef\u7528\u7248\u672c": "Available Version",
+  "\u6700\u540e\u68c0\u67e5": "Last Check",
   "维度详情": "Dimension Details",
   "主导航": "Main navigation",
   "同步中...": "Syncing...",
@@ -247,6 +262,7 @@ const englishMessages: Record<string, string> = {
   "通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。":
     "Check signed update packages from GitHub Releases. Windows may close the app while installing.",
   "检查中...": "Checking...",
+  "升级": "Upgrade",
   "检查更新": "Check for Updates",
   "更新状态": "Update Status",
   "发布时间": "Published At",
@@ -322,6 +338,7 @@ const englishMessages: Record<string, string> = {
   "保存后台自动同步设置失败：{error}": "Failed to save background sync settings: {error}",
   "已触发一次后台同步。": "Background sync has been triggered once.",
   "触发后台同步失败：{error}": "Failed to trigger background sync: {error}",
+  "发现新版本，可以下载并安装。": "A new version is available. You can download and install it.",
   "发现新版本 {version}，可以下载并安装。":
     "Found version {version}. You can download and install it.",
   "当前已经是最新版本。": "You are already on the latest version.",

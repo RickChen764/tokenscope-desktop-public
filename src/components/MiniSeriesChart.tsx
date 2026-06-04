@@ -8,8 +8,9 @@ import {
 import { init, use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { useI18n } from "../i18n";
+import { useDisplayPreference } from "../preferences/display";
 import type { DailyUsagePoint } from "../types/dashboard";
-import { formatCompactToken, formatInteger } from "../utils/format";
+import { formatInteger, formatTokenByDisplayMode } from "../utils/format";
 
 interface MiniSeriesChartProps {
   agentPoints?: DailyUsagePoint[];
@@ -123,6 +124,7 @@ export function MiniSeriesChart({
   title,
 }: MiniSeriesChartProps) {
   const { numberLocale, t } = useI18n();
+  const { numberDisplayMode } = useDisplayPreference();
   const [chartMode, setChartMode] = useState<ChartMode>("bar");
   const chartNodeRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<ChartInstance | null>(null);
@@ -276,7 +278,7 @@ export function MiniSeriesChart({
           return `<div class="usage-tooltip-row"><span>${item.marker ?? ""}${item.seriesName ?? ""}</span><strong title="${formatTooltipValue(
             value,
             numberLocale,
-          )}">${formatCompactToken(value, numberLocale)}${percent}</strong></div>`;
+          )}">${formatTokenByDisplayMode(value, numberLocale, numberDisplayMode)}${percent}</strong></div>`;
         })
         .join("");
 
@@ -285,7 +287,7 @@ export function MiniSeriesChart({
       }</div>${rows}<div class="usage-tooltip-total"><span>${t("总量")}</span><strong title="${formatTooltipValue(
         total,
         numberLocale,
-      )}">${formatCompactToken(total, numberLocale)}</strong></div></div>`;
+      )}">${formatTokenByDisplayMode(total, numberLocale, numberDisplayMode)}</strong></div></div>`;
     };
     const barSeries = chartData.barSeries.map((series) => ({
       barMaxWidth: 34,
@@ -375,7 +377,8 @@ export function MiniSeriesChart({
       yAxis: {
         axisLabel: {
           color: "#b9b9b9",
-          formatter: (value: number) => formatCompactToken(value, numberLocale),
+          formatter: (value: number) =>
+            formatTokenByDisplayMode(value, numberLocale, numberDisplayMode),
         },
         name: "Token",
         nameGap: 16,
@@ -384,7 +387,7 @@ export function MiniSeriesChart({
         type: "value",
       },
     };
-  }, [chartData, chartMode, numberLocale, t]);
+  }, [chartData, chartMode, numberDisplayMode, numberLocale, t]);
 
   useEffect(() => {
     const node = chartNodeRef.current;
@@ -446,7 +449,7 @@ export function MiniSeriesChart({
             <div>
               <span>{t("区间 Token")}</span>
               <strong title={`${formatInteger(chartData.totalTokens, numberLocale)} Token`}>
-                {formatCompactToken(chartData.totalTokens, numberLocale)}
+                {formatTokenByDisplayMode(chartData.totalTokens, numberLocale, numberDisplayMode)}
               </strong>
             </div>
             <div>
@@ -459,14 +462,14 @@ export function MiniSeriesChart({
                 }
               >
                 {chartData.peakBucket
-                  ? `${chartData.peakBucket.date.slice(5)} / ${formatCompactToken(chartData.peakBucket.totalTokens, numberLocale)}`
+                  ? `${chartData.peakBucket.date.slice(5)} / ${formatTokenByDisplayMode(chartData.peakBucket.totalTokens, numberLocale, numberDisplayMode)}`
                   : t("无")}
               </strong>
             </div>
             <div>
               <span>{t("日均 Token")}</span>
               <strong title={`${formatInteger(chartData.averageDailyTokens, numberLocale)} Token`}>
-                {formatCompactToken(chartData.averageDailyTokens, numberLocale)}
+                {formatTokenByDisplayMode(chartData.averageDailyTokens, numberLocale, numberDisplayMode)}
               </strong>
             </div>
             <div>

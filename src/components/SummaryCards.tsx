@@ -1,6 +1,7 @@
 import type { DashboardSummary } from "../types/dashboard";
 import { useI18n } from "../i18n";
-import { formatCompactToken, formatInteger, formatLatency, formatPercent } from "../utils/format";
+import { useDisplayPreference } from "../preferences/display";
+import { formatInteger, formatLatency, formatPercent, formatTokenByDisplayMode } from "../utils/format";
 
 interface SummaryCardsProps {
   isLoading: boolean;
@@ -9,11 +10,12 @@ interface SummaryCardsProps {
 
 export function SummaryCards({ isLoading, summary }: SummaryCardsProps) {
   const { numberLocale, t } = useI18n();
+  const { numberDisplayMode } = useDisplayPreference();
   const cards = [
     {
       exactValue: `${formatInteger(summary.total_tokens, numberLocale)} Token`,
       label: t("Token 总量"),
-      value: formatCompactToken(summary.total_tokens, numberLocale),
+      value: formatTokenByDisplayMode(summary.total_tokens, numberLocale, numberDisplayMode),
     },
     { label: t("调用次数"), value: formatInteger(summary.calls, numberLocale) },
     { label: t("错误率"), value: formatPercent(summary.error_rate, numberLocale) },
@@ -21,7 +23,7 @@ export function SummaryCards({ isLoading, summary }: SummaryCardsProps) {
     {
       exactValue: `${formatInteger(summary.cached_input_tokens, numberLocale)} Token`,
       label: t("缓存输入"),
-      value: formatCompactToken(summary.cached_input_tokens, numberLocale),
+      value: formatTokenByDisplayMode(summary.cached_input_tokens, numberLocale, numberDisplayMode),
     },
     { label: t("最高 Agent"), value: summary.top_agent_id ?? t("无") },
     { label: t("最高模型"), value: summary.top_model ?? t("无") },

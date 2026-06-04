@@ -1268,7 +1268,7 @@ impl TokenScopeRepository {
             .app_setting_value("background_sync_enabled")
             .await?
             .map(|value| value == "true")
-            .unwrap_or(false);
+            .unwrap_or(true);
         let interval_minutes = self
             .app_setting_value("background_sync_interval_minutes")
             .await?
@@ -2656,6 +2656,7 @@ mod tests {
             .await
             .expect("sync settings read");
 
+        assert!(settings.enabled);
         assert!(settings.sync_on_startup);
     }
 
@@ -3502,7 +3503,7 @@ mod tests {
             .get_sync_settings()
             .await
             .expect("sync settings defaults load");
-        assert!(!defaults.enabled);
+        assert!(defaults.enabled);
         assert_eq!(defaults.interval_minutes, 30);
         assert!(defaults.sync_on_startup);
         assert_eq!(defaults.last_result.as_deref(), None);

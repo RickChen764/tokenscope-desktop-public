@@ -21,6 +21,7 @@ import type {
   SyncSettingsInput,
   AppUpdateInfo,
   AppUpdateProgress,
+  AppUpdateStatus,
   TopDimensionRow,
   CustomImporterPreview,
   CustomImporterProfile,
@@ -39,6 +40,9 @@ declare global {
 export type AgentImportMode = "incremental" | "full";
 
 let pendingAppUpdate: Update | null = null;
+const SYNC_SETTINGS_STORAGE_KEY = "tokenscope.syncSettings";
+const APP_UPDATE_STATE_STORAGE_KEY = "tokenscope.appUpdateInfo";
+export const APP_UPDATE_INFO_EVENT = "tokenscope:app-update-info";
 
 const emptySummary: DashboardSummary = {
   total_tokens: 0,
@@ -127,14 +131,175 @@ const emptyDataHealthSummary: DataHealthSummary = {
 
 function defaultSyncSettings(): SyncSettings {
   return {
-    enabled: false,
+    enabled: true,
     interval_minutes: 30,
     sync_on_startup: true,
     last_sync_at: null,
     next_sync_at: null,
-    last_result: tr("浏览器预览环境未启用后台同步。"),
+    last_result: null,
     last_error: null,
   };
+}
+
+function normalizeSyncInterval(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 30;
+  }
+
+  return Math.min(1440, Math.max(5, Math.round(parsed)));
+}
+
+function nextBrowserSyncAt(settings: SyncSettings) {
+  if (!settings.enabled) {
+    return null;
+  }
+
+  if (!settings.last_sync_at) {
+    return new Date().toISOString();
+  }
+
+  const lastSyncMs = Date.parse(settings.last_sync_at);
+  if (Number.isNaN(lastSyncMs)) {
+    return new Date().toISOString();
+  }
+
+  return new Date(lastSyncMs + settings.interval_minutes * 60_000).toISOString();
+}
+
+function normalizeSyncSettings(input: Partial<SyncSettings>): SyncSettings {
+  const defaults = defaultSyncSettings();
+  const normalized: SyncSettings = {
+    ...defaults,
+    ...input,
+    enabled: typeof input.enabled === "boolean" ? input.enabled : defaults.enabled,
+    interval_minutes: normalizeSyncInterval(input.interval_minutes),
+    sync_on_startup:
+      typeof input.sync_on_startup === "boolean"
+        ? input.sync_on_startup
+        : defaults.sync_on_startup,
+    last_error: input.last_error ?? null,
+    last_result: input.last_result ?? null,
+  };
+  normalized.next_sync_at = nextBrowserSyncAt(normalized);
+  return normalized;
+}
+
+function readBrowserSyncSettings() {
+  if (typeof window === "undefined") {
+    return defaultSyncSettings();
+  }
+
+  try {
+    const stored = window.localStorage.getItem(SYNC_SETTINGS_STORAGE_KEY);
+    if (!stored) {
+      return normalizeSyncSettings({});
+    }
+
+    return normalizeSyncSettings(JSON.parse(stored) as Partial<SyncSettings>);
+  } catch {
+    return normalizeSyncSettings({});
+  }
+}
+
+function writeBrowserSyncSettings(settings: Partial<SyncSettings>) {
+  const nextSettings = normalizeSyncSettings({
+    ...readBrowserSyncSettings(),
+    ...settings,
+  });
+
+  try {
+    window.localStorage.setItem(SYNC_SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+  } catch {
+    // Browser preview storage is best effort; desktop builds persist via SQLite.
+  }
+
+  return nextSettings;
+}
+
+function defaultAppUpdateInfo(status: AppUpdateStatus = "idle"): AppUpdateInfo {
+  return {
+    available: false,
+    current_version: null,
+    version: null,
+    date: null,
+    body: null,
+    status,
+    checked_at: null,
+    error: null,
+  };
+}
+
+function normalizeAppUpdateStatus(value: unknown): AppUpdateStatus {
+  switch (value) {
+    case "checking":
+    case "current":
+    case "available":
+    case "downloading":
+    case "installing":
+    case "error":
+    case "browser-preview":
+      return value;
+    case "idle":
+    default:
+      return "idle";
+  }
+}
+
+function normalizeAppUpdateInfo(input: Partial<AppUpdateInfo>): AppUpdateInfo {
+  const defaults = defaultAppUpdateInfo();
+  return {
+    ...defaults,
+    ...input,
+    available: Boolean(input.available),
+    current_version: input.current_version ?? null,
+    version: input.version ?? null,
+    date: input.date ?? null,
+    body: input.body ?? null,
+    status: normalizeAppUpdateStatus(input.status),
+    checked_at: input.checked_at ?? null,
+    error: input.error ?? null,
+  };
+}
+
+function stringifyError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function getStoredAppUpdateInfo() {
+  if (typeof window === "undefined") {
+    return defaultAppUpdateInfo();
+  }
+
+  try {
+    const stored = window.localStorage.getItem(APP_UPDATE_STATE_STORAGE_KEY);
+    if (!stored) {
+      return defaultAppUpdateInfo();
+    }
+
+    return normalizeAppUpdateInfo(JSON.parse(stored) as Partial<AppUpdateInfo>);
+  } catch {
+    return defaultAppUpdateInfo();
+  }
+}
+
+function writeStoredAppUpdateInfo(info: Partial<AppUpdateInfo>) {
+  const nextInfo = normalizeAppUpdateInfo({
+    ...getStoredAppUpdateInfo(),
+    ...info,
+  });
+
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(APP_UPDATE_STATE_STORAGE_KEY, JSON.stringify(nextInfo));
+    } catch {
+      // Update state only improves UX; the updater itself remains authoritative.
+    }
+
+    window.dispatchEvent(new CustomEvent<AppUpdateInfo>(APP_UPDATE_INFO_EVENT, { detail: nextInfo }));
+  }
+
+  return nextInfo;
 }
 
 function isDesktopRuntime() {
@@ -345,12 +510,12 @@ export async function runCustomImporter(id: string) {
 }
 
 export function getSyncSettings() {
-  return invokeOrFallback<SyncSettings>("get_sync_settings", {}, defaultSyncSettings());
+  return invokeOrFallback<SyncSettings>("get_sync_settings", {}, readBrowserSyncSettings());
 }
 
 export async function saveSyncSettings(settings: SyncSettingsInput) {
   if (!isDesktopRuntime()) {
-    return { ...defaultSyncSettings(), ...settings };
+    return writeBrowserSyncSettings(settings);
   }
 
   return invoke<SyncSettings>("save_sync_settings", { input: settings });
@@ -358,10 +523,11 @@ export async function saveSyncSettings(settings: SyncSettingsInput) {
 
 export async function runBackgroundSyncOnce() {
   if (!isDesktopRuntime()) {
-    return {
-      ...defaultSyncSettings(),
+    return writeBrowserSyncSettings({
+      last_sync_at: new Date().toISOString(),
+      last_error: null,
       last_result: tr("浏览器预览环境已跳过后台同步。"),
-    };
+    });
   }
 
   return invoke<SyncSettings>("run_background_sync_once");
@@ -374,22 +540,39 @@ function toAppUpdateInfo(update: Update | null): AppUpdateInfo {
     version: update?.version ?? null,
     date: update?.date ?? null,
     body: update?.body ?? null,
+    status: update ? "available" : "current",
+    checked_at: new Date().toISOString(),
+    error: null,
   };
 }
 
 export async function checkForAppUpdate() {
   if (!isDesktopRuntime()) {
-    return {
+    return writeStoredAppUpdateInfo({
       available: false,
       current_version: null,
       version: null,
       date: null,
       body: tr("浏览器预览环境无法检查应用更新。"),
-    };
+      status: "browser-preview",
+      checked_at: new Date().toISOString(),
+      error: null,
+    });
   }
 
-  pendingAppUpdate = await check();
-  return toAppUpdateInfo(pendingAppUpdate);
+  try {
+    pendingAppUpdate = await check();
+    return writeStoredAppUpdateInfo(toAppUpdateInfo(pendingAppUpdate));
+  } catch (err) {
+    pendingAppUpdate = null;
+    writeStoredAppUpdateInfo({
+      available: false,
+      status: "error",
+      checked_at: new Date().toISOString(),
+      error: stringifyError(err),
+    });
+    throw err;
+  }
 }
 
 export async function installPendingAppUpdate(
@@ -398,6 +581,25 @@ export async function installPendingAppUpdate(
   requireDesktopRuntime("安装应用更新");
 
   if (!pendingAppUpdate) {
+    try {
+      pendingAppUpdate = await check();
+    } catch (err) {
+      writeStoredAppUpdateInfo({
+        status: "error",
+        checked_at: new Date().toISOString(),
+        error: stringifyError(err),
+      });
+      throw err;
+    }
+  }
+
+  if (!pendingAppUpdate) {
+    writeStoredAppUpdateInfo({
+      available: false,
+      status: "current",
+      checked_at: new Date().toISOString(),
+      error: null,
+    });
     throw new Error(tr("没有可安装的待处理更新，请先检查更新。"));
   }
 
@@ -410,6 +612,12 @@ export async function installPendingAppUpdate(
       contentLength = event.data.contentLength ?? null;
     } else if (event.event === "Progress") {
       downloadedBytes += event.data.chunkLength;
+    } else if (event.event === "Finished") {
+      downloadedBytes = contentLength ?? downloadedBytes;
+      writeStoredAppUpdateInfo({
+        status: "installing",
+        error: null,
+      });
     }
 
     onProgress?.({
@@ -420,9 +628,26 @@ export async function installPendingAppUpdate(
   }
 
   const update = pendingAppUpdate;
-  await update.downloadAndInstall(emitProgress);
-  pendingAppUpdate = null;
-  await relaunch();
+  writeStoredAppUpdateInfo({
+    status: "downloading",
+    error: null,
+  });
+
+  try {
+    await update.downloadAndInstall(emitProgress);
+    pendingAppUpdate = null;
+    writeStoredAppUpdateInfo({
+      status: "installing",
+      error: null,
+    });
+    await relaunch();
+  } catch (err) {
+    writeStoredAppUpdateInfo({
+      status: "error",
+      error: stringifyError(err),
+    });
+    throw err;
+  }
 }
 
 export function detectLocalAgents() {

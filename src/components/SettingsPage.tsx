@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentSourcesPanel } from "./AgentSourcesPanel";
 import { CustomImportersPanel } from "./CustomImportersPanel";
 import { DeviceDatasetsPanel } from "./DeviceDatasetsPanel";
+import { ToastNotice, type ToastNoticeValue } from "./ToastNotice";
 import {
   checkForAppUpdate,
   detectLocalAgents,
   exportCallsCsv,
+  getStoredAppUpdateInfo,
   getSyncSettings,
   importDetectedAgents,
   installPendingAppUpdate,
@@ -14,6 +16,7 @@ import {
   saveSyncSettings,
 } from "../services/dashboard";
 import { useI18n, type AppLanguage } from "../i18n";
+import { useDisplayPreference, type NumberDisplayMode } from "../preferences/display";
 import type {
   AgentSourceSummary,
   AppUpdateInfo,
@@ -21,12 +24,12 @@ import type {
   SyncSettings,
   SyncSettingsInput,
 } from "../types/dashboard";
-import { formatDateTime } from "../utils/format";
+import { formatBytes, formatDateTime } from "../utils/format";
 
 const SYNC_INTERVAL_VALUES = [15, 30, 60, 180];
 
 const defaultSyncDraft: SyncSettingsInput = {
-  enabled: false,
+  enabled: true,
   interval_minutes: 30,
   sync_on_startup: true,
 };
@@ -58,6 +61,7 @@ export function SettingsPage({
   onSeedDemoData,
 }: SettingsPageProps) {
   const { language, setLanguage, t } = useI18n();
+  const { numberDisplayMode, setNumberDisplayMode } = useDisplayPreference();
   const [sources, setSources] = useState<AgentSourceSummary[]>([]);
   const [isSourcesLoading, setIsSourcesLoading] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -65,17 +69,17 @@ export function SettingsPage({
   const [isExporting, setIsExporting] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
   const [syncDraft, setSyncDraft] = useState<SyncSettingsInput>(defaultSyncDraft);
+  const syncDraftRef = useRef<SyncSettingsInput>(defaultSyncDraft);
+  const syncSaveRequestRef = useRef(0);
   const [isSyncSettingsLoading, setIsSyncSettingsLoading] = useState(true);
   const [isSavingSyncSettings, setIsSavingSyncSettings] = useState(false);
   const [isRunningBackgroundSync, setIsRunningBackgroundSync] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo>(() => getStoredAppUpdateInfo());
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [updateProgress, setUpdateProgress] =
     useState<AppUpdateProgress>(emptyUpdateProgress);
-  const [notice, setNotice] = useState<{ kind: "error" | "success"; message: string } | null>(
-    null,
-  );
+  const [notice, setNotice] = useState<ToastNoticeValue | null>(null);
 
   const loadSources = useCallback(async (options?: { showLoading?: boolean }) => {
     if (options?.showLoading ?? true) {
@@ -101,12 +105,18 @@ export function SettingsPage({
     }
   }, [t]);
 
+  const applySyncSettings = useCallback((settings: SyncSettings) => {
+    const nextDraft = syncDraftFromSettings(settings);
+    syncDraftRef.current = nextDraft;
+    setSyncSettings(settings);
+    setSyncDraft(nextDraft);
+  }, []);
+
   const loadSyncSettings = useCallback(async () => {
     setIsSyncSettingsLoading(true);
     try {
       const settings = await getSyncSettings();
-      setSyncSettings(settings);
-      setSyncDraft(syncDraftFromSettings(settings));
+      applySyncSettings(settings);
     } catch (err) {
       setNotice({
         kind: "error",
@@ -117,7 +127,7 @@ export function SettingsPage({
     } finally {
       setIsSyncSettingsLoading(false);
     }
-  }, [t]);
+  }, [applySyncSettings, t]);
 
   useEffect(() => {
     void loadSources();
@@ -278,8 +288,36 @@ export function SettingsPage({
     }
   }
 
+  async function persistSyncSettingsDraft(nextDraft: SyncSettingsInput) {
+    const requestId = syncSaveRequestRef.current + 1;
+    syncSaveRequestRef.current = requestId;
+    setIsSavingSyncSettings(true);
+    try {
+      const settings = await saveSyncSettings(nextDraft);
+      if (requestId === syncSaveRequestRef.current) {
+        applySyncSettings(settings);
+      }
+    } catch (err) {
+      if (requestId === syncSaveRequestRef.current) {
+        setNotice({
+          kind: "error",
+          message: t("淇濆瓨鍚庡彴鑷姩鍚屾璁剧疆澶辫触锛歿error}", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        });
+      }
+    } finally {
+      if (requestId === syncSaveRequestRef.current) {
+        setIsSavingSyncSettings(false);
+      }
+    }
+  }
+
   function updateSyncDraft<K extends keyof SyncSettingsInput>(key: K, value: SyncSettingsInput[K]) {
-    setSyncDraft((current) => ({ ...current, [key]: value }));
+    const nextDraft = { ...syncDraftRef.current, [key]: value };
+    syncDraftRef.current = nextDraft;
+    setSyncDraft(nextDraft);
+    void persistSyncSettingsDraft(nextDraft);
   }
 
   async function handleSaveSyncSettings() {
@@ -287,8 +325,7 @@ export function SettingsPage({
     setNotice(null);
     try {
       const settings = await saveSyncSettings(syncDraft);
-      setSyncSettings(settings);
-      setSyncDraft(syncDraftFromSettings(settings));
+      applySyncSettings(settings);
       setNotice({ kind: "success", message: t("后台自动同步设置已保存。") });
     } catch (err) {
       setNotice({
@@ -307,8 +344,7 @@ export function SettingsPage({
     setNotice(null);
     try {
       const settings = await runBackgroundSyncOnce();
-      setSyncSettings(settings);
-      setSyncDraft(syncDraftFromSettings(settings));
+      applySyncSettings(settings);
       setNotice({ kind: "success", message: t("已触发一次后台同步。") });
       void loadSources({ showLoading: false });
     } catch (err) {
@@ -327,6 +363,12 @@ export function SettingsPage({
     setIsCheckingUpdate(true);
     setNotice(null);
     setUpdateProgress(emptyUpdateProgress);
+    setUpdateInfo((current) => ({
+      ...current,
+      status: "checking",
+      checked_at: new Date().toISOString(),
+      error: null,
+    }));
     try {
       const nextUpdateInfo = await checkForAppUpdate();
       setUpdateInfo(nextUpdateInfo);
@@ -345,6 +387,7 @@ export function SettingsPage({
           error: err instanceof Error ? err.message : String(err),
         }),
       });
+      setUpdateInfo(getStoredAppUpdateInfo());
     } finally {
       setIsCheckingUpdate(false);
     }
@@ -354,9 +397,19 @@ export function SettingsPage({
     setIsInstallingUpdate(true);
     setNotice(null);
     setUpdateProgress(emptyUpdateProgress);
+    setUpdateInfo((current) => ({
+      ...current,
+      status: "downloading",
+      error: null,
+    }));
     try {
       await installPendingAppUpdate((progress) => {
         setUpdateProgress(progress);
+        setUpdateInfo((current) => ({
+          ...current,
+          status: progress.event === "Finished" ? "installing" : "downloading",
+          error: null,
+        }));
       });
       setNotice({
         kind: "success",
@@ -369,6 +422,7 @@ export function SettingsPage({
           error: err instanceof Error ? err.message : String(err),
         }),
       });
+      setUpdateInfo(getStoredAppUpdateInfo());
       setIsInstallingUpdate(false);
     }
   }
@@ -399,11 +453,36 @@ export function SettingsPage({
       : updateProgress.event === "Finished"
         ? 100
         : 0;
-  const updateVersionLabel = updateInfo?.available
-    ? `${updateInfo.current_version || t("当前版本")} → ${updateInfo.version}`
-    : updateInfo
-      ? t("当前已是最新版本")
-      : t("尚未检查");
+  const updateStatusLabel =
+    updateInfo.status === "checking"
+      ? t("\u68c0\u67e5\u4e2d...")
+      : updateInfo.status === "current"
+        ? t("\u5f53\u524d\u5df2\u662f\u6700\u65b0\u7248\u672c")
+        : updateInfo.status === "available"
+          ? t("\u53ef\u66f4\u65b0")
+          : updateInfo.status === "downloading"
+            ? t("\u4e0b\u8f7d\u4e2d...")
+            : updateInfo.status === "installing"
+              ? t("\u5b89\u88c5\u4e2d...")
+              : updateInfo.status === "error"
+                ? t("\u68c0\u67e5\u5931\u8d25")
+                : updateInfo.status === "browser-preview"
+                  ? t("\u9884\u89c8\u73af\u5883")
+                  : t("\u5c1a\u672a\u68c0\u67e5");
+  const updateLastCheckedLabel = formatDateTime(
+    updateInfo.checked_at,
+    t("\u5c1a\u672a\u68c0\u67e5"),
+  );
+  const updateCurrentVersionLabel = updateInfo.current_version || t("\u672a\u77e5");
+  const updateAvailableVersionLabel =
+    updateInfo.version ||
+    (updateInfo.status === "current" ? t("\u5df2\u662f\u6700\u65b0\u7248\u672c") : t("\u65e0"));
+  const updateProgressBytesLabel = updateProgress.content_length
+    ? `${formatBytes(updateProgress.downloaded_bytes, language)} / ${formatBytes(
+        updateProgress.content_length,
+        language,
+      )}`
+    : formatBytes(updateProgress.downloaded_bytes, language);
 
   function handleLanguageChange(nextLanguage: AppLanguage) {
     setLanguage(nextLanguage);
@@ -416,9 +495,20 @@ export function SettingsPage({
     });
   }
 
+  function handleNumberDisplayModeChange(nextMode: NumberDisplayMode) {
+    setNumberDisplayMode(nextMode);
+    setNotice({
+      kind: "success",
+      message:
+        nextMode === "compact"
+          ? t("数字显示已切换为缩略显示。")
+          : t("数字显示已切换为完整显示。"),
+    });
+  }
+
   return (
     <section className="settings-page">
-      {notice ? <div className={`notice ${notice.kind} inline-notice`}>{notice.message}</div> : null}
+      <ToastNotice notice={notice} onClose={() => setNotice(null)} />
 
       <section className="settings-section data-sync-section">
         <div className="settings-section-heading">
@@ -454,7 +544,7 @@ export function SettingsPage({
               </button>
             </div>
 
-            <div className="settings-form">
+            <div className="sync-settings-layout">
               <div className="sync-control-grid">
                 <label className="switch-field">
                   <span>{t("启用后台自动同步")}</span>
@@ -504,14 +594,16 @@ export function SettingsPage({
                   <span>{t("下一次计划")}</span>
                   <strong>{nextSyncLabel}</strong>
                 </div>
-                <div className="sync-status-message">
+                <div className="sync-result-panel sync-status-message">
                   <span>{t("最近结果")}</span>
-                  <strong title={lastResultLabel}>{lastResultLabel}</strong>
+                  <strong className="sync-result-text" title={lastResultLabel}>
+                    {lastResultLabel}
+                  </strong>
                 </div>
-                <div className="sync-status-message">
+                <div className="sync-result-panel sync-status-message">
                   <span>{t("最近错误")}</span>
                   <strong
-                    className={syncSettings?.last_error ? "danger-text" : ""}
+                    className={`sync-result-text${syncSettings?.last_error ? " danger-text" : ""}`}
                     title={lastErrorLabel}
                   >
                     {lastErrorLabel}
@@ -589,6 +681,31 @@ export function SettingsPage({
         </div>
 
         <div className="settings-two-column settings-app-grid">
+          <section className="panel display-preference-card">
+            <div className="panel-heading settings-heading">
+              <div>
+                <h2>{t("数字显示")}</h2>
+                <p>{t("控制 Token 数值在概览、图表和排行中的展示方式。")}</p>
+              </div>
+              <div className="segmented display-mode-segmented" aria-label={t("数字显示")}>
+                <button
+                  className={numberDisplayMode === "compact" ? "active" : ""}
+                  onClick={() => handleNumberDisplayModeChange("compact")}
+                  type="button"
+                >
+                  {t("缩略显示")}
+                </button>
+                <button
+                  className={numberDisplayMode === "full" ? "active" : ""}
+                  onClick={() => handleNumberDisplayModeChange("full")}
+                  type="button"
+                >
+                  {t("完整显示")}
+                </button>
+              </div>
+            </div>
+          </section>
+
           <section className="panel language-card">
             <div className="panel-heading settings-heading">
               <div>
@@ -626,22 +743,39 @@ export function SettingsPage({
 
             <div className="detail-stat-list update-status-list">
               <div>
-                <span>{t("更新状态")}</span>
-                <strong>{updateVersionLabel}</strong>
+                <span>{t("\u66f4\u65b0\u72b6\u6001")}</span>
+                <strong>{updateStatusLabel}</strong>
               </div>
               <div>
-                <span>{t("发布时间")}</span>
-                <strong>{formatDateTime(updateInfo?.date ?? null, t("无"))}</strong>
+                <span>{t("\u53d1\u5e03\u65f6\u95f4")}</span>
+                <strong>{formatDateTime(updateInfo.date, t("\u65e0"))}</strong>
+              </div>
+              <div>
+                <span>{t("\u5f53\u524d\u7248\u672c")}</span>
+                <strong>{updateCurrentVersionLabel}</strong>
+              </div>
+              <div>
+                <span>{t("\u53ef\u7528\u7248\u672c")}</span>
+                <strong>{updateAvailableVersionLabel}</strong>
+              </div>
+              <div>
+                <span>{t("\u6700\u540e\u68c0\u67e5")}</span>
+                <strong>{updateLastCheckedLabel}</strong>
               </div>
             </div>
 
-            {updateInfo?.body ? <p className="update-notes">{updateInfo.body}</p> : null}
+            {updateInfo.error ? (
+              <p className="update-notes danger-text">{updateInfo.error}</p>
+            ) : updateInfo.body ? (
+              <p className="update-notes">{updateInfo.body}</p>
+            ) : null}
 
             {isInstallingUpdate || updateProgress.downloaded_bytes > 0 ? (
               <div className="update-progress-block">
                 <div className="update-progress-meta">
                   <span>{t("下载进度")}</span>
                   <strong>{updateProgressPercent}%</strong>
+                  <small className="update-progress-bytes">{updateProgressBytesLabel}</small>
                 </div>
                 <div className="update-progress-bar" aria-label={t("下载进度")}>
                   <span style={{ width: `${updateProgressPercent}%` }} />

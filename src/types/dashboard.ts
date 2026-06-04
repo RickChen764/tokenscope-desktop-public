@@ -65,12 +65,25 @@ export interface SyncSettings extends SyncSettingsInput {
   last_error: string | null;
 }
 
+export type AppUpdateStatus =
+  | "idle"
+  | "checking"
+  | "current"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "error"
+  | "browser-preview";
+
 export interface AppUpdateInfo {
   available: boolean;
   current_version: string | null;
   version: string | null;
   date: string | null;
   body: string | null;
+  status: AppUpdateStatus;
+  checked_at: string | null;
+  error: string | null;
 }
 
 export interface AppUpdateProgress {

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ToastNotice, type ToastNoticeValue } from "./ToastNotice";
 import { exportCallsCsv } from "../services/dashboard";
 import type { DashboardRange, LlmCallFilters } from "../types/dashboard";
 import { useI18n } from "../i18n";
@@ -8,9 +9,7 @@ export function ReportsPage() {
   const { t } = useI18n();
   const [range, setRange] = useState<DashboardRange>("30d");
   const [isExporting, setIsExporting] = useState(false);
-  const [notice, setNotice] = useState<{ kind: "error" | "success"; message: string } | null>(
-    null,
-  );
+  const [notice, setNotice] = useState<ToastNoticeValue | null>(null);
 
   const dateWindow = useMemo(() => getLocalDateWindow(range), [range]);
 
@@ -50,7 +49,7 @@ export function ReportsPage() {
 
   return (
     <section className="reports-page">
-      {notice ? <div className={`notice ${notice.kind} inline-notice`}>{notice.message}</div> : null}
+      <ToastNotice notice={notice} onClose={() => setNotice(null)} />
 
       <section className="panel report-export-panel">
         <div>

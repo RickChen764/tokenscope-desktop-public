@@ -150,13 +150,32 @@ test("settings page exposes background auto sync settings without proxy setup", 
   assert.ok(dashboardService.includes("AgentImportMode"));
   assert.ok(dashboardService.includes("mode = \"incremental\""));
   assert.ok(dashboardService.includes("import_detected_agents"));
-  assert.ok(dashboardService.includes("enabled: false"));
+  assert.ok(dashboardService.includes("enabled: true"));
   assert.ok(dashboardService.includes("sync_on_startup: true"));
+  assert.ok(dashboardService.includes("SYNC_SETTINGS_STORAGE_KEY"));
+  assert.ok(dashboardService.includes("window.localStorage.setItem"));
+  assert.ok(dashboardService.includes("window.localStorage.getItem"));
   assert.ok(dashboardTypes.includes("interface SyncSettings"));
   assert.ok(dashboardTypes.includes("interface SyncSettingsInput"));
   assert.ok(dashboardTypes.includes("status: string"));
   assert.ok(dashboardTypes.includes("error: string | null"));
   assert.ok(dashboardCommands.includes("mode: Option<String>"));
+});
+
+test("background sync settings auto-save and use a contained split layout", () => {
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(settingsPage.includes("syncDraftRef"));
+  assert.ok(settingsPage.includes("persistSyncSettingsDraft"));
+  assert.ok(settingsPage.includes("void persistSyncSettingsDraft(nextDraft)"));
+  assert.ok(styles.includes(".sync-settings-card .form-actions"));
+  assert.ok(styles.includes("display: none"));
+  assert.ok(styles.includes(".sync-settings-layout"));
+  assert.ok(styles.includes("grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr)"));
+  assert.ok(styles.includes(".sync-result-panel"));
+  assert.ok(styles.includes(".sync-result-text"));
+  assert.ok(styles.includes("overflow-wrap: anywhere"));
 });
 
 test("settings page is organized into clear grouped sections", () => {
@@ -356,16 +375,60 @@ test("overview token numbers use compact labels while preserving exact hover val
   const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
   const topList = readProjectFile("src/components/TopList.tsx");
 
-  assert.ok(summaryCards.includes("formatCompactToken"));
+  assert.ok(summaryCards.includes("formatTokenByDisplayMode"));
   assert.ok(summaryCards.includes("exactValue"));
   assert.ok(summaryCards.includes("title={card.exactValue"));
-  assert.ok(chart.includes("formatCompactToken"));
+  assert.ok(chart.includes("formatTokenByDisplayMode"));
   assert.ok(chart.includes("formatTooltipValue"));
   assert.ok(chart.includes("formatInteger(value, locale)"));
   assert.ok(chart.includes("title={`${formatInteger(chartData.totalTokens"));
-  assert.ok(topList.includes("formatCompactToken"));
+  assert.ok(topList.includes("formatTokenByDisplayMode"));
   assert.ok(topList.includes("variant === \"overview\""));
   assert.ok(topList.includes("title={formatInteger(row.total_tokens"));
+});
+
+test("token number display mode is user configurable and persisted", () => {
+  const main = readProjectFile("src/main.tsx");
+  const preferences = readProjectFile("src/preferences/display.tsx");
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const summaryCards = readProjectFile("src/components/SummaryCards.tsx");
+  const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
+  const topList = readProjectFile("src/components/TopList.tsx");
+
+  assert.ok(main.includes("DisplayPreferenceProvider"));
+  assert.ok(preferences.includes("TokenScopeNumberDisplayMode"));
+  assert.ok(preferences.includes("numberDisplayMode"));
+  assert.ok(preferences.includes("setNumberDisplayMode"));
+  assert.ok(preferences.includes("window.localStorage.setItem"));
+  assert.ok(settingsPage.includes("useDisplayPreference"));
+  assert.ok(settingsPage.includes("数字显示"));
+  assert.ok(settingsPage.includes("缩略显示"));
+  assert.ok(settingsPage.includes("完整显示"));
+  assert.ok(summaryCards.includes("useDisplayPreference"));
+  assert.ok(summaryCards.includes("formatTokenByDisplayMode"));
+  assert.ok(chart.includes("useDisplayPreference"));
+  assert.ok(chart.includes("formatTokenByDisplayMode"));
+  assert.ok(topList.includes("useDisplayPreference"));
+  assert.ok(topList.includes("formatTokenByDisplayMode"));
+});
+
+test("application settings controls stay contained in a balanced settings grid", () => {
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(settingsPage.includes("settings-section app-preferences-section"));
+  assert.ok(settingsPage.includes("display-preference-card"));
+  assert.ok(settingsPage.includes("display-mode-segmented"));
+  assert.ok(settingsPage.includes("language-card"));
+  assert.ok(settingsPage.includes("app-update-card"));
+  assert.ok(styles.includes(".settings-app-grid"));
+  assert.ok(styles.includes("grid-template-columns: repeat(3, minmax(260px, 1fr))"));
+  assert.ok(styles.includes(".settings-app-grid .settings-heading"));
+  assert.ok(styles.includes("flex-direction: column"));
+  assert.ok(styles.includes(".display-mode-segmented"));
+  assert.ok(styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"));
+  assert.ok(styles.includes(".settings-app-grid > .panel:not(:nth-child(3n))"));
+  assert.ok(styles.includes("@media (max-width: 1280px)"));
 });
 
 test("daily chart uses an information-rich visual stage without losing scale context", () => {
@@ -407,6 +470,30 @@ test("side rail sync status uses a top-layer custom popover", () => {
   assert.ok(styles.includes("z-index: 2147483000"));
   assert.ok(styles.includes("overflow: visible"));
   assert.ok(styles.includes(".sync-status-rail:hover .rail-status-popover"));
+});
+
+test("action notices use auto-dismiss toast tips with hover persistence", () => {
+  const appShell = readProjectFile("src/app/App.tsx");
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const reportsPage = readProjectFile("src/components/ReportsPage.tsx");
+  const toastNotice = readProjectFile("src/components/ToastNotice.tsx");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(appShell.includes("ToastNotice"));
+  assert.ok(settingsPage.includes("ToastNotice"));
+  assert.ok(reportsPage.includes("ToastNotice"));
+  assert.ok(toastNotice.includes("TOAST_AUTO_DISMISS_MS = 5000"));
+  assert.ok(toastNotice.includes("onMouseEnter"));
+  assert.ok(toastNotice.includes("onMouseLeave"));
+  assert.ok(toastNotice.includes("onPointerEnter"));
+  assert.ok(toastNotice.includes("onPointerLeave"));
+  assert.ok(toastNotice.includes("hoverRef.current"));
+  assert.ok(toastNotice.includes("setCanDismiss(true)"));
+  assert.ok(toastNotice.includes("exiting"));
+  assert.ok(styles.includes(".toast-viewport"));
+  assert.ok(styles.includes(".toast-notice"));
+  assert.ok(styles.includes("@keyframes toast-in"));
+  assert.ok(styles.includes("@keyframes toast-out"));
 });
 
 test("settings page exposes configurable sqlite importers without proxy capture", () => {
@@ -554,6 +641,57 @@ test("application exposes a signed Tauri updater workflow", () => {
   assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY = Get-Content"));
   assert.ok(buildScript.includes("pnpm exec tauri build --ci"));
   assert.ok(buildScript.includes("tokenscope-desktop.key"));
+});
+
+test("application updater keeps explicit persisted state and complete progress", () => {
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const appShell = readProjectFile("src/app/App.tsx");
+  const dashboardService = readProjectFile("src/services/dashboard.ts");
+  const dashboardTypes = readProjectFile("src/types/dashboard.ts");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(dashboardTypes.includes("type AppUpdateStatus"));
+  assert.ok(dashboardTypes.includes("checked_at: string | null"));
+  assert.ok(dashboardTypes.includes("error: string | null"));
+  assert.ok(dashboardService.includes("APP_UPDATE_STATE_STORAGE_KEY"));
+  assert.ok(dashboardService.includes("getStoredAppUpdateInfo"));
+  assert.ok(dashboardService.includes("writeStoredAppUpdateInfo"));
+  assert.ok(dashboardService.includes('status: update ? "available" : "current"'));
+  assert.ok(dashboardService.includes('event.event === "Finished"'));
+  assert.ok(dashboardService.includes("writeStoredAppUpdateInfo({"));
+  assert.ok(settingsPage.includes("getStoredAppUpdateInfo"));
+  assert.ok(settingsPage.includes("updateStatusLabel"));
+  assert.ok(settingsPage.includes("updateLastCheckedLabel"));
+  assert.ok(settingsPage.includes("updateProgressBytesLabel"));
+  assert.ok(settingsPage.includes("formatBytes"));
+  assert.ok(settingsPage.includes("setUpdateInfo(getStoredAppUpdateInfo())"));
+  assert.ok(appShell.includes("getStoredAppUpdateInfo"));
+  assert.ok(appShell.includes("installPendingAppUpdate"));
+  assert.ok(appShell.includes("appUpdateInfo.available"));
+  assert.ok(appShell.includes("update-status-rail"));
+  assert.ok(appShell.includes("update-status-popover"));
+  assert.ok(dashboardService.includes("APP_UPDATE_INFO_EVENT"));
+  assert.ok(dashboardService.includes("window.dispatchEvent"));
+  assert.ok(appShell.includes("addEventListener(APP_UPDATE_INFO_EVENT"));
+  assert.ok(styles.includes(".update-status-list"));
+  assert.ok(styles.includes(".update-progress-bytes"));
+  assert.ok(styles.includes(".update-status-rail"));
+  assert.ok(styles.includes(".update-status-popover"));
+});
+
+test("release manifest scripts validate versions and updater artifacts before publishing", () => {
+  const createLatestJsonScript = readProjectFile("scripts/create-latest-json.ps1");
+  const buildReleaseScript = readProjectFile("scripts/build-release.ps1");
+
+  assert.ok(createLatestJsonScript.includes("Get-PackageVersion"));
+  assert.ok(createLatestJsonScript.includes("Assert-VersionConsistency"));
+  assert.ok(createLatestJsonScript.includes("Assert-ReleaseArtifact"));
+  assert.ok(createLatestJsonScript.includes("Get-FileHash"));
+  assert.ok(createLatestJsonScript.includes("Installer SHA256"));
+  assert.ok(createLatestJsonScript.includes("ConvertFrom-Json"));
+  assert.ok(buildReleaseScript.includes("Assert-ReleaseVersionConsistency"));
+  assert.ok(buildReleaseScript.includes("package.json"));
+  assert.ok(buildReleaseScript.includes("tauri.conf.json"));
 });
 
 test("application and installer support Chinese and English localization", () => {

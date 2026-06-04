@@ -37,6 +37,37 @@ export function formatCompactToken(value: number, locale = "zh-CN") {
   return formatCompactNumber(value, locale);
 }
 
+export function formatBytes(value: number, locale = "zh-CN") {
+  if (!Number.isFinite(value) || value <= 0) {
+    return `0 B`;
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const maximumFractionDigits = size >= 100 || unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  const formattedSize = new Intl.NumberFormat(locale, {
+    maximumFractionDigits,
+    minimumFractionDigits: 0,
+  }).format(size);
+
+  return `${formattedSize} ${units[unitIndex]}`;
+}
+
+export function formatTokenByDisplayMode(
+  value: number,
+  locale = "zh-CN",
+  mode: "compact" | "full" = "compact",
+) {
+  return mode === "full" ? formatInteger(value, locale) : formatCompactToken(value, locale);
+}
+
 export function formatCost(value: number, currency = "USD") {
   const normalizedCurrency = currency.trim().toUpperCase();
   if (normalizedCurrency === "MIXED") {

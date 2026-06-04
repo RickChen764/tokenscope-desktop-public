@@ -1,6 +1,7 @@
 import type { DimensionKind, TopDimensionRow } from "../types/dashboard";
 import { useI18n } from "../i18n";
-import { formatCompactToken, formatInteger } from "../utils/format";
+import { useDisplayPreference } from "../preferences/display";
+import { formatInteger, formatTokenByDisplayMode } from "../utils/format";
 
 interface TopListProps {
   dimensionLabel?: string;
@@ -30,6 +31,7 @@ export function TopList({
   variant = "default",
 }: TopListProps) {
   const { numberLocale, t } = useI18n();
+  const { numberDisplayMode } = useDisplayPreference();
   const visibleRows = typeof maxRows === "number" ? rows.slice(0, maxRows) : rows;
   const resolvedDimensionLabel = dimensionLabel ?? title;
   const resolvedValueLabel = valueLabel ?? t("Token 用量");
@@ -93,7 +95,7 @@ export function TopList({
                     </td>
                     <td className="top-list-value" title={formatInteger(row.total_tokens, numberLocale)}>
                       {variant === "overview"
-                        ? formatCompactToken(row.total_tokens, numberLocale)
+                        ? formatTokenByDisplayMode(row.total_tokens, numberLocale, numberDisplayMode)
                         : formatInteger(row.total_tokens, numberLocale)}
                     </td>
                   </tr>

@@ -10,6 +10,35 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $keyPath = [System.IO.Path]::GetFullPath($SigningKeyPath)
 
+function Get-JsonVersion {
+  param(
+    [string]$Path,
+    [string]$Name
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    throw "Missing $Name`: $Path"
+  }
+
+  $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+  return [string]$json.version
+}
+
+function Assert-ReleaseVersionConsistency {
+  param([string]$Root)
+
+  $packagePath = Join-Path $Root "package.json"
+  $tauriConfigPath = Join-Path $Root "src-tauri\tauri.conf.json"
+  $packageVersion = Get-JsonVersion -Path $packagePath -Name "package.json"
+  $tauriVersion = Get-JsonVersion -Path $tauriConfigPath -Name "tauri.conf.json"
+
+  if ($packageVersion -ne $tauriVersion) {
+    throw "Version mismatch: package.json is $packageVersion but tauri.conf.json is $tauriVersion"
+  }
+}
+
+Assert-ReleaseVersionConsistency -Root $root
+
 if (-not (Test-Path -LiteralPath $keyPath)) {
   throw "Missing Tauri updater signing key: $keyPath"
 }

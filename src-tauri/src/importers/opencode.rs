@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, Utc};
@@ -131,33 +132,13 @@ pub async fn import_opencode_usage_from_path_with_scope(
         .since
         .as_ref()
         .map(|timestamp| timestamp.timestamp_millis());
+    let source_schema = OpenCodeSourceSchema::load(&source_pool).await?;
+    let message_query = source_schema.message_query();
 
-    let rows = query_as::<_, OpenCodeMessageRow>(
-        r#"
-    SELECT
-      m.id,
-      m.session_id,
-      m.time_created,
-      m.time_updated,
-      m.data,
-      s.directory AS session_directory,
-      s.agent AS session_agent,
-      s.model AS session_model,
-      p.name AS project_name,
-      p.worktree AS project_worktree,
-      w.name AS workspace_name,
-      w.directory AS workspace_directory
-    FROM message m
-    LEFT JOIN session s ON s.id = m.session_id
-    LEFT JOIN project p ON p.id = s.project_id
-    LEFT JOIN workspace w ON w.id = s.workspace_id
-    WHERE (?1 IS NULL OR COALESCE(m.time_updated, m.time_created, 0) >= ?1)
-    ORDER BY m.time_created ASC, m.id ASC
-    "#,
-    )
-    .bind(since_ms)
-    .fetch_all(&source_pool)
-    .await?;
+    let rows = query_as::<_, OpenCodeMessageRow>(&message_query)
+        .bind(since_ms)
+        .fetch_all(&source_pool)
+        .await?;
 
     let mut imported = 0;
     let mut skipped = 0;
@@ -187,7 +168,8 @@ pub async fn import_opencode_usage_from_path_with_scope(
     }
 
     if importable_messages == 0 {
-        let part_result = import_part_usage(repository, &source_pool, scope).await?;
+        let part_result =
+            import_part_usage(repository, &source_pool, scope, &source_schema).await?;
         imported += part_result.imported;
         skipped += part_result.skipped;
     }
@@ -205,39 +187,17 @@ async fn import_part_usage(
     repository: &TokenScopeRepository,
     source_pool: &sqlx::SqlitePool,
     scope: &ImportScope,
+    source_schema: &OpenCodeSourceSchema,
 ) -> Result<OpenCodeImportResult, sqlx::Error> {
     let since_ms = scope
         .since
         .as_ref()
         .map(|timestamp| timestamp.timestamp_millis());
-    let rows = query_as::<_, OpenCodePartRow>(
-        r#"
-    SELECT
-      part.id,
-      part.session_id,
-      part.time_created,
-      part.time_updated,
-      part.data,
-      message.data AS message_data,
-      s.directory AS session_directory,
-      s.agent AS session_agent,
-      s.model AS session_model,
-      p.name AS project_name,
-      p.worktree AS project_worktree,
-      w.name AS workspace_name,
-      w.directory AS workspace_directory
-    FROM part
-    LEFT JOIN message ON message.id = part.message_id
-    LEFT JOIN session s ON s.id = part.session_id
-    LEFT JOIN project p ON p.id = s.project_id
-    LEFT JOIN workspace w ON w.id = s.workspace_id
-    WHERE (?1 IS NULL OR COALESCE(part.time_updated, part.time_created, 0) >= ?1)
-    ORDER BY part.time_created ASC, part.id ASC
-    "#,
-    )
-    .bind(since_ms)
-    .fetch_all(source_pool)
-    .await?;
+    let part_query = source_schema.part_query();
+    let rows = query_as::<_, OpenCodePartRow>(&part_query)
+        .bind(since_ms)
+        .fetch_all(source_pool)
+        .await?;
 
     let mut imported = 0;
     let mut skipped = 0;
@@ -268,6 +228,187 @@ async fn import_part_usage(
         skipped,
         source_path: String::new(),
     })
+}
+
+#[derive(Debug)]
+struct OpenCodeSourceSchema {
+    message_columns: HashSet<String>,
+    part_columns: HashSet<String>,
+    session_columns: HashSet<String>,
+    project_columns: HashSet<String>,
+    workspace_columns: HashSet<String>,
+}
+
+impl OpenCodeSourceSchema {
+    async fn load(pool: &sqlx::SqlitePool) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            message_columns: table_columns(pool, "message").await?,
+            part_columns: table_columns(pool, "part").await?,
+            session_columns: table_columns(pool, "session").await?,
+            project_columns: table_columns(pool, "project").await?,
+            workspace_columns: table_columns(pool, "workspace").await?,
+        })
+    }
+
+    fn message_query(&self) -> String {
+        let session_join = self.session_join("m", &self.message_columns);
+        let has_session_join = !session_join.is_empty();
+        let project_join = self.project_join(has_session_join);
+        let workspace_join = self.workspace_join(has_session_join);
+        let session_directory =
+            self.session_column_expression(has_session_join, &["directory", "path"]);
+        let session_agent = self.session_column_expression(has_session_join, &["agent"]);
+        let session_model = self.session_column_expression(has_session_join, &["model"]);
+        let project_name = aliased_column_expression("p", &self.project_columns, &["name"]);
+        let project_worktree = aliased_column_expression("p", &self.project_columns, &["worktree"]);
+        let workspace_name = aliased_column_expression("w", &self.workspace_columns, &["name"]);
+        let workspace_directory =
+            aliased_column_expression("w", &self.workspace_columns, &["directory"]);
+
+        format!(
+            r#"
+    SELECT
+      m.id,
+      m.session_id,
+      m.time_created,
+      m.time_updated,
+      m.data,
+      {session_directory} AS session_directory,
+      {session_agent} AS session_agent,
+      {session_model} AS session_model,
+      {project_name} AS project_name,
+      {project_worktree} AS project_worktree,
+      {workspace_name} AS workspace_name,
+      {workspace_directory} AS workspace_directory
+    FROM message m
+    {session_join}
+    {project_join}
+    {workspace_join}
+    WHERE (?1 IS NULL OR COALESCE(m.time_updated, m.time_created, 0) >= ?1)
+    ORDER BY m.time_created ASC, m.id ASC
+    "#,
+        )
+    }
+
+    fn part_query(&self) -> String {
+        let message_join =
+            if self.part_columns.contains("message_id") && self.message_columns.contains("id") {
+                "LEFT JOIN message ON message.id = part.message_id"
+            } else {
+                ""
+            };
+        let message_data = if !message_join.is_empty() && self.message_columns.contains("data") {
+            "message.data".to_string()
+        } else {
+            "NULL".to_string()
+        };
+        let session_join = self.session_join("part", &self.part_columns);
+        let has_session_join = !session_join.is_empty();
+        let project_join = self.project_join(has_session_join);
+        let workspace_join = self.workspace_join(has_session_join);
+        let session_directory =
+            self.session_column_expression(has_session_join, &["directory", "path"]);
+        let session_agent = self.session_column_expression(has_session_join, &["agent"]);
+        let session_model = self.session_column_expression(has_session_join, &["model"]);
+        let project_name = aliased_column_expression("p", &self.project_columns, &["name"]);
+        let project_worktree = aliased_column_expression("p", &self.project_columns, &["worktree"]);
+        let workspace_name = aliased_column_expression("w", &self.workspace_columns, &["name"]);
+        let workspace_directory =
+            aliased_column_expression("w", &self.workspace_columns, &["directory"]);
+
+        format!(
+            r#"
+    SELECT
+      part.id,
+      part.session_id,
+      part.time_created,
+      part.time_updated,
+      part.data,
+      {message_data} AS message_data,
+      {session_directory} AS session_directory,
+      {session_agent} AS session_agent,
+      {session_model} AS session_model,
+      {project_name} AS project_name,
+      {project_worktree} AS project_worktree,
+      {workspace_name} AS workspace_name,
+      {workspace_directory} AS workspace_directory
+    FROM part
+    {message_join}
+    {session_join}
+    {project_join}
+    {workspace_join}
+    WHERE (?1 IS NULL OR COALESCE(part.time_updated, part.time_created, 0) >= ?1)
+    ORDER BY part.time_created ASC, part.id ASC
+    "#,
+        )
+    }
+
+    fn session_join(&self, event_alias: &str, event_columns: &HashSet<String>) -> String {
+        if self.session_columns.contains("id") && event_columns.contains("session_id") {
+            return format!("LEFT JOIN session s ON s.id = {event_alias}.session_id");
+        }
+
+        String::new()
+    }
+
+    fn session_column_expression(
+        &self,
+        has_session_join: bool,
+        column_candidates: &[&str],
+    ) -> String {
+        if has_session_join {
+            aliased_column_expression("s", &self.session_columns, column_candidates)
+        } else {
+            "NULL".to_string()
+        }
+    }
+
+    fn project_join(&self, has_session_join: bool) -> &'static str {
+        if has_session_join
+            && self.session_columns.contains("project_id")
+            && self.project_columns.contains("id")
+        {
+            "LEFT JOIN project p ON p.id = s.project_id"
+        } else {
+            ""
+        }
+    }
+
+    fn workspace_join(&self, has_session_join: bool) -> &'static str {
+        if has_session_join
+            && self.session_columns.contains("workspace_id")
+            && self.workspace_columns.contains("id")
+        {
+            "LEFT JOIN workspace w ON w.id = s.workspace_id"
+        } else {
+            ""
+        }
+    }
+}
+
+async fn table_columns(
+    pool: &sqlx::SqlitePool,
+    table_name: &str,
+) -> Result<HashSet<String>, sqlx::Error> {
+    let rows = query(&format!("PRAGMA table_info({table_name})"))
+        .fetch_all(pool)
+        .await?;
+
+    rows.into_iter()
+        .map(|row| row.try_get::<String, _>("name"))
+        .collect()
+}
+
+fn aliased_column_expression(
+    alias: &str,
+    columns: &HashSet<String>,
+    column_candidates: &[&str],
+) -> String {
+    column_candidates
+        .iter()
+        .find(|column_name| columns.contains(**column_name))
+        .map(|column_name| format!("{alias}.{column_name}"))
+        .unwrap_or_else(|| "NULL".to_string())
 }
 
 async fn has_imported(
@@ -860,6 +1001,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imports_opencode_messages_when_session_agent_column_is_missing() {
+        let source_path = create_opencode_db_without_session_agent().await;
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("target repository connects");
+        repository.migrate().await.expect("target migrations run");
+
+        let result = import_opencode_usage_from_path(&repository, &source_path)
+            .await
+            .expect("opencode import supports missing session.agent");
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.skipped, 0);
+
+        let row = query(
+            r#"
+      SELECT agent_id, agent_name, model_response, total_tokens
+      FROM llm_call
+      WHERE id = 'opencode-message-message_assistant_1'
+      "#,
+        )
+        .fetch_one(repository.pool())
+        .await
+        .expect("imported call exists");
+
+        assert_eq!(row.get::<String, _>("agent_id"), "opencode");
+        assert_eq!(row.get::<String, _>("agent_name"), "opencode");
+        assert_eq!(row.get::<String, _>("model_response"), "gpt-5.5");
+        assert_eq!(row.get::<i64, _>("total_tokens"), 1590);
+    }
+
+    #[tokio::test]
     async fn import_opencode_messages_is_idempotent() {
         let source_path = create_opencode_db(true).await;
         let repository = TokenScopeRepository::connect_in_memory()
@@ -959,6 +1132,17 @@ mod tests {
     }
 
     async fn create_opencode_db(with_message_usage: bool) -> PathBuf {
+        create_opencode_db_with_schema(with_message_usage, true).await
+    }
+
+    async fn create_opencode_db_without_session_agent() -> PathBuf {
+        create_opencode_db_with_schema(true, false).await
+    }
+
+    async fn create_opencode_db_with_schema(
+        with_message_usage: bool,
+        with_session_agent: bool,
+    ) -> PathBuf {
         let path = std::env::temp_dir().join(format!("tokenscope-opencode-{}.db", Uuid::new_v4()));
         let _ = fs::remove_file(&path);
         let options = SqliteConnectOptions::new()
@@ -970,14 +1154,14 @@ mod tests {
             .await
             .expect("source db connects");
 
-        create_schema(&pool).await;
-        insert_fixture_rows(&pool, with_message_usage).await;
+        create_schema(&pool, with_session_agent).await;
+        insert_fixture_rows(&pool, with_message_usage, with_session_agent).await;
         pool.close().await;
 
         path
     }
 
-    async fn create_schema(pool: &sqlx::SqlitePool) {
+    async fn create_schema(pool: &sqlx::SqlitePool, with_session_agent: bool) {
         query(
             r#"
       CREATE TABLE workspace (
@@ -1016,7 +1200,12 @@ mod tests {
         .await
         .expect("project schema created");
 
-        query(
+        let agent_column = if with_session_agent {
+            "agent TEXT,"
+        } else {
+            ""
+        };
+        query(&format!(
             r#"
       CREATE TABLE session (
         id TEXT PRIMARY KEY,
@@ -1030,11 +1219,11 @@ mod tests {
         time_updated INTEGER NOT NULL,
         workspace_id TEXT,
         path TEXT,
-        agent TEXT,
+        {agent_column}
         model TEXT
       )
       "#,
-        )
+        ))
         .execute(pool)
         .await
         .expect("session schema created");
@@ -1071,7 +1260,11 @@ mod tests {
         .expect("part schema created");
     }
 
-    async fn insert_fixture_rows(pool: &sqlx::SqlitePool, with_message_usage: bool) {
+    async fn insert_fixture_rows(
+        pool: &sqlx::SqlitePool,
+        with_message_usage: bool,
+        with_session_agent: bool,
+    ) {
         query(
             r#"
       INSERT INTO project (
@@ -1118,7 +1311,7 @@ mod tests {
         .await
         .expect("workspace inserted");
 
-        query(
+        let session_sql = if with_session_agent {
             r#"
       INSERT INTO session (
         id,
@@ -1145,11 +1338,38 @@ mod tests {
         'builder',
         '{"providerID":"openai","modelID":"gpt-5.5"}'
       )
-      "#,
-        )
-        .execute(pool)
-        .await
-        .expect("session inserted");
+      "#
+        } else {
+            r#"
+      INSERT INTO session (
+        id,
+        project_id,
+        slug,
+        directory,
+        title,
+        version,
+        time_created,
+        time_updated,
+        workspace_id,
+        model
+      ) VALUES (
+        'session_1',
+        'project_1',
+        'session-1',
+        'D:\Project\sample-project',
+        'sensitive session title',
+        '1.0.0',
+        1790000000000,
+        1790000010000,
+        'workspace_1',
+        '{"providerID":"openai","modelID":"gpt-5.5"}'
+      )
+      "#
+        };
+        query(session_sql)
+            .execute(pool)
+            .await
+            .expect("session inserted");
 
         let assistant_data = if with_message_usage {
             json!({
