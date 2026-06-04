@@ -9,6 +9,35 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $script:Utf8NoBom
+try {
+  [Console]::InputEncoding = $script:Utf8NoBom
+  [Console]::OutputEncoding = $script:Utf8NoBom
+} catch {
+  # Non-interactive PowerShell hosts may not expose writable console encodings.
+}
+
+function Read-Utf8Text {
+  param([string]$Path)
+
+  return [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($Path), $script:Utf8NoBom)
+}
+
+function Write-Utf8Text {
+  param(
+    [string]$Path,
+    [string]$Text
+  )
+
+  [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($Path), $Text, $script:Utf8NoBom)
+}
+
+function Read-JsonFile {
+  param([string]$Path)
+
+  return Read-Utf8Text -Path $Path | ConvertFrom-Json
+}
 
 function Get-ProjectRoot {
   return [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -18,7 +47,7 @@ function Get-TauriVersion {
   param([string]$Root)
 
   $configPath = Join-Path $Root "src-tauri\tauri.conf.json"
-  $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+  $config = Read-JsonFile -Path $configPath
   return [string]$config.version
 }
 
@@ -26,7 +55,7 @@ function Get-PackageVersion {
   param([string]$Root)
 
   $packagePath = Join-Path $Root "package.json"
-  $package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
+  $package = Read-JsonFile -Path $packagePath
   return [string]$package.version
 }
 
@@ -82,7 +111,7 @@ if ($NotesPath) {
     throw "Missing release notes file: $notesFullPath"
   }
 
-  $Notes = [System.IO.File]::ReadAllText($notesFullPath, [System.Text.UTF8Encoding]::new($false))
+  $Notes = Read-Utf8Text -Path $notesFullPath
 }
 
 if (-not $BundleDir) {
@@ -119,7 +148,7 @@ Assert-ReleaseArtifact -Path $publishedBundlePath -Name "published installer"
 Assert-ReleaseArtifact -Path $publishedSignaturePath -Name "published updater signature"
 
 $urlVersion = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }
-$signature = (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+$signature = (Read-Utf8Text -Path $signaturePath).Trim()
 $installerSha256 = (Get-FileHash -LiteralPath $publishedBundlePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $latestJson = [ordered]@{
@@ -135,12 +164,8 @@ $latestJson = [ordered]@{
 }
 
 $latestJsonText = $latestJson | ConvertTo-Json -Depth 6
-$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-[System.IO.File]::WriteAllText($OutputPath, $latestJsonText, $utf8NoBom)
-$validatedLatestJsonText = [System.IO.File]::ReadAllText(
-  [System.IO.Path]::GetFullPath($OutputPath),
-  [System.Text.UTF8Encoding]::new($false)
-)
+Write-Utf8Text -Path $OutputPath -Text $latestJsonText
+$validatedLatestJsonText = Read-Utf8Text -Path $OutputPath
 $validatedLatestJson = $validatedLatestJsonText | ConvertFrom-Json
 if ($validatedLatestJson.version -ne $Version) {
   throw "latest.json validation failed: expected version $Version"

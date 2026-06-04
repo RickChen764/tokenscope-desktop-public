@@ -638,7 +638,7 @@ test("application exposes a signed Tauri updater workflow", () => {
   assert.ok(releaseScript.includes('RepoFullName = "RickChen764/tokenscope-desktop-public"'));
   assert.ok(releaseScript.includes("releases/download"));
   assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY_PATH"));
-  assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY = Get-Content"));
+  assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY = Read-Utf8Text -Path $keyPath"));
   assert.ok(buildScript.includes("pnpm exec tauri build --ci"));
   assert.ok(buildScript.includes("tokenscope-desktop.key"));
 });
@@ -695,6 +695,32 @@ test("release manifest scripts validate versions and updater artifacts before pu
   assert.ok(buildReleaseScript.includes("Assert-ReleaseVersionConsistency"));
   assert.ok(buildReleaseScript.includes("package.json"));
   assert.ok(buildReleaseScript.includes("tauri.conf.json"));
+});
+
+test("powershell release scripts pin UTF-8 boundaries for Chinese release text", () => {
+  const buildReleaseScript = readProjectFile("scripts/build-release.ps1");
+  const createLatestJsonScript = readProjectFile("scripts/create-latest-json.ps1");
+  const publicSyncScript = readProjectFile("scripts/sync-public.ps1");
+
+  for (const script of [buildReleaseScript, createLatestJsonScript, publicSyncScript]) {
+    assert.ok(script.includes("$script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)"));
+    assert.ok(script.includes("$OutputEncoding = $script:Utf8NoBom"));
+    assert.ok(script.includes("[Console]::InputEncoding = $script:Utf8NoBom"));
+    assert.ok(script.includes("[Console]::OutputEncoding = $script:Utf8NoBom"));
+  }
+
+  assert.ok(buildReleaseScript.includes("[string]$NotesPath"));
+  assert.ok(buildReleaseScript.includes("@latestJsonArgs"));
+  assert.ok(buildReleaseScript.includes("Read-JsonFile"));
+  assert.ok(buildReleaseScript.includes("Read-Utf8Text"));
+
+  assert.ok(createLatestJsonScript.includes("function Read-Utf8Text"));
+  assert.ok(createLatestJsonScript.includes("function Write-Utf8Text"));
+  assert.ok(createLatestJsonScript.includes("function Read-JsonFile"));
+  assert.equal(createLatestJsonScript.includes("Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json"), false);
+  assert.equal(createLatestJsonScript.includes("[System.IO.File]::WriteAllText($OutputPath"), false);
+
+  assert.ok(publicSyncScript.includes("Get-Content -LiteralPath $ignorePath -Encoding UTF8"));
 });
 
 test("application and installer support Chinese and English localization", () => {

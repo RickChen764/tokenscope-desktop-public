@@ -1,14 +1,35 @@
 param(
   [string]$SigningKeyPath = "$env:USERPROFILE\.tauri\tokenscope-desktop.key",
   [string]$SigningKeyPassword = "",
+  [string]$NotesPath,
   [switch]$SkipLatestJson
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $script:Utf8NoBom
+try {
+  [Console]::InputEncoding = $script:Utf8NoBom
+  [Console]::OutputEncoding = $script:Utf8NoBom
+} catch {
+  # Non-interactive PowerShell hosts may not expose writable console encodings.
+}
 
 $root = Split-Path -Parent $PSScriptRoot
 $keyPath = [System.IO.Path]::GetFullPath($SigningKeyPath)
+
+function Read-Utf8Text {
+  param([string]$Path)
+
+  return [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($Path), $script:Utf8NoBom)
+}
+
+function Read-JsonFile {
+  param([string]$Path)
+
+  return Read-Utf8Text -Path $Path | ConvertFrom-Json
+}
 
 function Get-JsonVersion {
   param(
@@ -20,7 +41,7 @@ function Get-JsonVersion {
     throw "Missing $Name`: $Path"
   }
 
-  $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+  $json = Read-JsonFile -Path $Path
   return [string]$json.version
 }
 
@@ -44,7 +65,7 @@ if (-not (Test-Path -LiteralPath $keyPath)) {
 }
 
 $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $keyPath -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY = Read-Utf8Text -Path $keyPath
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $SigningKeyPassword
 
 pnpm exec tauri build --ci
@@ -53,7 +74,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if (-not $SkipLatestJson) {
-  & (Join-Path $PSScriptRoot "create-latest-json.ps1")
+  $latestJsonArgs = @()
+  if ($NotesPath) {
+    $latestJsonArgs += @("-NotesPath", $NotesPath)
+  }
+
+  & (Join-Path $PSScriptRoot "create-latest-json.ps1") @latestJsonArgs
   if ($LASTEXITCODE -ne 0) {
     throw "create-latest-json.ps1 failed"
   }
