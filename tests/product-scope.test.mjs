@@ -689,6 +689,8 @@ test("release manifest scripts validate versions and updater artifacts before pu
   assert.ok(createLatestJsonScript.includes("Get-FileHash"));
   assert.ok(createLatestJsonScript.includes("Installer SHA256"));
   assert.ok(createLatestJsonScript.includes("ConvertFrom-Json"));
+  assert.ok(createLatestJsonScript.includes("NotesPath"));
+  assert.ok(createLatestJsonScript.includes("ReadAllText"));
   assert.ok(buildReleaseScript.includes("Assert-ReleaseVersionConsistency"));
   assert.ok(buildReleaseScript.includes("package.json"));
   assert.ok(buildReleaseScript.includes("tauri.conf.json"));

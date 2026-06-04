@@ -2,6 +2,7 @@ param(
   [string]$RepoFullName = "RickChen764/tokenscope-desktop-public",
   [string]$Version,
   [string]$Notes = "TokenScope Desktop updater package.",
+  [string]$NotesPath,
   [string]$BundleDir,
   [string]$OutputPath
 )
@@ -74,6 +75,15 @@ if (-not $Version) {
   $Version = Get-TauriVersion -Root $root
 }
 Assert-VersionConsistency -Root $root -ExpectedVersion $Version
+
+if ($NotesPath) {
+  $notesFullPath = [System.IO.Path]::GetFullPath($NotesPath)
+  if (-not (Test-Path -LiteralPath $notesFullPath)) {
+    throw "Missing release notes file: $notesFullPath"
+  }
+
+  $Notes = [System.IO.File]::ReadAllText($notesFullPath, [System.Text.UTF8Encoding]::new($false))
+}
 
 if (-not $BundleDir) {
   $BundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
