@@ -23,7 +23,10 @@ impl GitHubSyncLayout {
     }
 
     pub fn manifest_path(&self, device_id: &str) -> String {
-        self.path(&format!("devices/{}/manifest.enc", safe_path_segment(device_id)))
+        self.path(&format!(
+            "devices/{}/manifest.enc",
+            safe_path_segment(device_id)
+        ))
     }
 
     pub fn bootstrap_path(&self, device_id: &str) -> String {
@@ -39,6 +42,10 @@ impl GitHubSyncLayout {
             safe_path_segment(device_id),
             safe_path_segment(date_local)
         ))
+    }
+
+    pub fn days_path(&self, device_id: &str) -> String {
+        self.path(&format!("devices/{}/days", safe_path_segment(device_id)))
     }
 
     fn path(&self, suffix: &str) -> String {
@@ -186,6 +193,44 @@ impl GitHubContentsClient {
             .collect())
     }
 
+    pub async fn list_day_files(
+        &self,
+        layout: &GitHubSyncLayout,
+        device_id: &str,
+    ) -> Result<Vec<GitHubContentFile>, String> {
+        let response = self
+            .http
+            .get(self.contents_url(&layout.days_path(device_id)))
+            .query(&[("ref", self.branch.as_str())])
+            .headers(self.headers())
+            .send()
+            .await
+            .map_err(|err| format!("GitHub 日期分片目录读取失败：{err}"))?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+
+        let entries = response
+            .json::<Vec<GitHubListEntry>>()
+            .await
+            .map_err(|err| format!("GitHub 日期分片目录响应解析失败：{err}"))?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.entry_type == "file")
+            .filter_map(|entry| {
+                Some(GitHubContentFile {
+                    name: entry.name,
+                    path: entry.path?,
+                    sha: entry.sha?,
+                    content: Vec::new(),
+                })
+            })
+            .collect())
+    }
+
     fn contents_url(&self, path: &str) -> String {
         format!(
             "https://api.github.com/repos/{}/{}/contents/{}",
@@ -262,6 +307,8 @@ struct GitHubContentNode {
 #[derive(Debug, Deserialize)]
 struct GitHubListEntry {
     name: String,
+    path: Option<String>,
+    sha: Option<String>,
     #[serde(rename = "type")]
     entry_type: String,
 }
@@ -318,6 +365,10 @@ mod tests {
         assert_eq!(
             layout.day_path("device-a", "2026-06-05"),
             "tokenscope-sync/v1/devices/device-a/days/2026-06-05.tokenscope.zst.enc"
+        );
+        assert_eq!(
+            layout.days_path("device-a"),
+            "tokenscope-sync/v1/devices/device-a/days"
         );
     }
 

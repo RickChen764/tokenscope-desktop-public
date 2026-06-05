@@ -1,6 +1,6 @@
 [package]
 name = "tokenscope-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "Local-first LLM token usage dashboard"
 authors = ["TokenScope"]
 edition = "2021"
