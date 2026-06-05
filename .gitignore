@@ -14,4 +14,6 @@ src-tauri/gen/
 *.p12
 *.pfx
 .superpowers/
+.worktrees/
+AGENTS.md
 .DS_Store
