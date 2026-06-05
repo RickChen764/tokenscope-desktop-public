@@ -279,6 +279,74 @@ pub struct SyncRunResult {
     pub finished_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncSettings {
+    pub enabled: bool,
+    pub owner: String,
+    pub repo: String,
+    pub branch: String,
+    pub path_prefix: String,
+    pub token_configured: bool,
+    pub token_redacted: Option<String>,
+    pub sync_password_configured: bool,
+    pub bootstrap_uploaded: bool,
+    pub last_upload_at: Option<String>,
+    pub last_import_at: Option<String>,
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncSettingsInput {
+    pub enabled: bool,
+    pub owner: String,
+    pub repo: String,
+    pub branch: String,
+    pub path_prefix: String,
+    pub token: Option<String>,
+    pub sync_password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct GitHubSyncShardState {
+    pub id: String,
+    pub device_id: String,
+    pub shard_kind: String,
+    pub shard_date: Option<String>,
+    pub content_hash: String,
+    pub github_path: String,
+    pub imported_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncShardStateInput {
+    pub device_id: String,
+    pub shard_kind: String,
+    pub shard_date: Option<String>,
+    pub content_hash: String,
+    pub github_path: String,
+    pub imported_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncConnectionTestResult {
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncRunResult {
+    pub status: String,
+    pub message: String,
+    pub uploaded_shards: i64,
+    pub downloaded_shards: i64,
+    pub imported: i64,
+    pub skipped: i64,
+    pub started_at: String,
+    pub finished_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CustomImporterProfile {
     pub id: String,

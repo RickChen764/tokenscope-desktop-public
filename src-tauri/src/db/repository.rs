@@ -16,7 +16,8 @@ use super::models::{
     AgentSourceStats, AppSettings, AppSettingsInput, CallFilterOptions, CustomImporterProfile,
     CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint, DashboardSummary,
     DataHealthIssueRow, DataHealthIssueSummary, DataHealthSummary, ExternalDataset,
-    ExternalDatasetImportCall, ExternalDatasetInput, LlmCallFilters, LlmCallPage, LlmCallRow,
+    ExternalDatasetImportCall, ExternalDatasetInput, GitHubSyncSettings, GitHubSyncSettingsInput,
+    GitHubSyncShardState, GitHubSyncShardStateInput, LlmCallFilters, LlmCallPage, LlmCallRow,
     NewLlmCall, ProviderConfig, ProviderConfigInput, SyncSettings, SyncSettingsInput,
     TokenPulseHourlyPoint, TokenPulseSnapshot, TokenPulseWindowPosition, TopDimensionRow,
     UnknownPricingModel,
@@ -299,6 +300,77 @@ impl TokenScopeRepository {
         }
 
         Ok(dataset)
+    }
+
+    pub async fn replace_external_dataset_date(
+        &self,
+        input: &ExternalDatasetInput,
+        date_local: &str,
+        calls: &[ExternalDatasetImportCall],
+    ) -> Result<ExternalDataset, sqlx::Error> {
+        self.upsert_external_dataset(input).await?;
+        query(
+            r#"
+      DELETE FROM agent_import_map
+      WHERE dataset_id = ?1
+        AND llm_call_id IN (
+          SELECT id
+          FROM llm_call
+          WHERE origin_dataset_id = ?1 AND date_local = ?2
+        )
+      "#,
+        )
+        .bind(&input.id)
+        .bind(date_local)
+        .execute(&self.pool)
+        .await?;
+        query("DELETE FROM llm_call WHERE origin_dataset_id = ?1 AND date_local = ?2")
+            .bind(&input.id)
+            .bind(date_local)
+            .execute(&self.pool)
+            .await?;
+
+        for call in calls {
+            self.insert_external_dataset_call(&input.id, call).await?;
+        }
+
+        let summary = query(
+            r#"
+      SELECT
+        COUNT(*) AS calls,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
+      FROM llm_call
+      WHERE origin_dataset_id = ?1
+      "#,
+        )
+        .bind(&input.id)
+        .fetch_one(&self.pool)
+        .await?;
+        query(
+            r#"
+      UPDATE external_dataset
+      SET
+        calls = ?1,
+        total_tokens = ?2,
+        estimated_cost_usd = ?3,
+        cost_currency = ?4,
+        updated_at = ?5
+      WHERE id = ?6
+      "#,
+        )
+        .bind(summary.try_get::<i64, _>("calls")?)
+        .bind(summary.try_get::<i64, _>("total_tokens")?)
+        .bind(summary.try_get::<f64, _>("estimated_cost_usd")?)
+        .bind(&input.cost_currency)
+        .bind(&input.updated_at)
+        .bind(&input.id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_external_dataset(&input.id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
     }
 
     pub async fn remove_external_dataset(&self, dataset_id: &str) -> Result<i64, sqlx::Error> {
@@ -1346,7 +1418,7 @@ impl TokenScopeRepository {
             .await?
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(30)
-            .clamp(5, 1440);
+            .clamp(1, 1440);
         let sync_on_startup = self
             .app_setting_value("background_sync_on_launch")
             .await?
@@ -1393,7 +1465,7 @@ impl TokenScopeRepository {
         input: &SyncSettingsInput,
     ) -> Result<SyncSettings, sqlx::Error> {
         let now = Local::now().to_rfc3339();
-        let interval_minutes = input.interval_minutes.clamp(5, 1440);
+        let interval_minutes = input.interval_minutes.clamp(1, 1440);
         self.upsert_app_setting_value(
             "background_sync_enabled",
             if input.enabled { "true" } else { "false" },
@@ -1418,6 +1490,243 @@ impl TokenScopeRepository {
         .await?;
 
         self.get_sync_settings().await
+    }
+
+    pub async fn get_github_sync_settings(&self) -> Result<GitHubSyncSettings, sqlx::Error> {
+        let enabled = self
+            .app_setting_value("github_sync_enabled")
+            .await?
+            .map(|value| value == "true")
+            .unwrap_or(false);
+        let owner = self
+            .app_setting_value("github_sync_owner")
+            .await?
+            .unwrap_or_default();
+        let repo = self
+            .app_setting_value("github_sync_repo")
+            .await?
+            .unwrap_or_default();
+        let branch = self
+            .app_setting_value("github_sync_branch")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "main".to_string());
+        let path_prefix = self
+            .app_setting_value("github_sync_path_prefix")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "tokenscope-sync".to_string());
+        let token = self.app_setting_value("github_sync_token").await?;
+        let sync_password = self.app_setting_value("github_sync_password").await?;
+        let bootstrap_uploaded = self
+            .app_setting_value("github_sync_bootstrap_uploaded")
+            .await?
+            .map(|value| value == "true")
+            .unwrap_or(false);
+        let last_status = self.app_setting_value("github_sync_last_status").await?;
+        let last_message = self.app_setting_value("github_sync_last_message").await?;
+
+        Ok(GitHubSyncSettings {
+            enabled,
+            owner,
+            repo,
+            branch,
+            path_prefix,
+            token_redacted: token.as_deref().map(redact_secret),
+            token_configured: token
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false),
+            sync_password_configured: sync_password
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false),
+            bootstrap_uploaded,
+            last_upload_at: self.app_setting_value("github_sync_last_upload_at").await?,
+            last_import_at: self.app_setting_value("github_sync_last_import_at").await?,
+            last_error: if last_status.as_deref() == Some("error") {
+                last_message.clone()
+            } else {
+                None
+            },
+            last_status,
+        })
+    }
+
+    pub async fn save_github_sync_settings(
+        &self,
+        input: &GitHubSyncSettingsInput,
+    ) -> Result<GitHubSyncSettings, sqlx::Error> {
+        let now = Local::now().to_rfc3339();
+        self.upsert_app_setting_value(
+            "github_sync_enabled",
+            if input.enabled { "true" } else { "false" },
+            &now,
+        )
+        .await?;
+        self.upsert_app_setting_value("github_sync_owner", input.owner.trim(), &now)
+            .await?;
+        self.upsert_app_setting_value("github_sync_repo", input.repo.trim(), &now)
+            .await?;
+        self.upsert_app_setting_value(
+            "github_sync_branch",
+            normalize_non_empty(&input.branch, "main"),
+            &now,
+        )
+        .await?;
+        self.upsert_app_setting_value(
+            "github_sync_path_prefix",
+            normalize_non_empty(&input.path_prefix, "tokenscope-sync"),
+            &now,
+        )
+        .await?;
+        if let Some(token) = input
+            .token
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            self.upsert_app_setting_value("github_sync_token", token.trim(), &now)
+                .await?;
+        }
+        if let Some(sync_password) = input
+            .sync_password
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            self.upsert_app_setting_value("github_sync_password", sync_password, &now)
+                .await?;
+        }
+
+        self.get_github_sync_settings().await
+    }
+
+    pub async fn github_sync_secret(&self, secret: &str) -> Result<Option<String>, sqlx::Error> {
+        let key = match secret {
+            "token" => "github_sync_token",
+            "password" | "sync_password" => "github_sync_password",
+            _ => return Ok(None),
+        };
+        self.app_setting_value(key).await
+    }
+
+    pub async fn record_github_sync_shard(
+        &self,
+        input: &GitHubSyncShardStateInput,
+    ) -> Result<GitHubSyncShardState, sqlx::Error> {
+        let id = github_sync_shard_id(
+            &input.device_id,
+            &input.shard_kind,
+            input.shard_date.as_deref(),
+        );
+        let now = Local::now().to_rfc3339();
+        query(
+            r#"
+      INSERT INTO github_sync_shard (
+        id,
+        device_id,
+        shard_kind,
+        shard_date,
+        content_hash,
+        github_path,
+        imported_at,
+        updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+      ON CONFLICT(id) DO UPDATE SET
+        device_id = excluded.device_id,
+        shard_kind = excluded.shard_kind,
+        shard_date = excluded.shard_date,
+        content_hash = excluded.content_hash,
+        github_path = excluded.github_path,
+        imported_at = excluded.imported_at,
+        updated_at = excluded.updated_at
+      "#,
+        )
+        .bind(&id)
+        .bind(&input.device_id)
+        .bind(&input.shard_kind)
+        .bind(&input.shard_date)
+        .bind(&input.content_hash)
+        .bind(&input.github_path)
+        .bind(&input.imported_at)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        self.github_sync_shard(
+            &input.device_id,
+            &input.shard_kind,
+            input.shard_date.as_deref(),
+        )
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn github_sync_shard(
+        &self,
+        device_id: &str,
+        shard_kind: &str,
+        shard_date: Option<&str>,
+    ) -> Result<Option<GitHubSyncShardState>, sqlx::Error> {
+        query_as::<_, GitHubSyncShardState>(
+            r#"
+      SELECT
+        id,
+        device_id,
+        shard_kind,
+        shard_date,
+        content_hash,
+        github_path,
+        imported_at,
+        updated_at
+      FROM github_sync_shard
+      WHERE device_id = ?1
+        AND shard_kind = ?2
+        AND (
+          (?3 IS NULL AND shard_date IS NULL)
+          OR shard_date = ?3
+        )
+      "#,
+        )
+        .bind(device_id)
+        .bind(shard_kind)
+        .bind(shard_date)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn set_github_sync_bootstrap_uploaded(
+        &self,
+        uploaded: bool,
+    ) -> Result<(), sqlx::Error> {
+        self.upsert_app_setting_value(
+            "github_sync_bootstrap_uploaded",
+            if uploaded { "true" } else { "false" },
+            &Local::now().to_rfc3339(),
+        )
+        .await
+    }
+
+    pub async fn record_github_sync_run(
+        &self,
+        status: &str,
+        message: &str,
+        upload_at: Option<&str>,
+        import_at: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let now = Local::now().to_rfc3339();
+        self.upsert_app_setting_value("github_sync_last_status", status, &now)
+            .await?;
+        self.upsert_app_setting_value("github_sync_last_message", message, &now)
+            .await?;
+        if let Some(upload_at) = upload_at {
+            self.upsert_app_setting_value("github_sync_last_upload_at", upload_at, &now)
+                .await?;
+        }
+        if let Some(import_at) = import_at {
+            self.upsert_app_setting_value("github_sync_last_import_at", import_at, &now)
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn token_pulse_window_position(
@@ -2715,6 +3024,24 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
+fn normalize_non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    }
+}
+
+fn github_sync_shard_id(device_id: &str, shard_kind: &str, shard_date: Option<&str>) -> String {
+    format!(
+        "{}:{}:{}",
+        device_id.trim(),
+        shard_kind.trim(),
+        shard_date.unwrap_or("bootstrap").trim()
+    )
+}
+
 fn redact_secret(secret: &str) -> String {
     if secret.len() <= 8 {
         return "********".to_string();
@@ -3771,6 +4098,65 @@ mod tests {
         assert_eq!(after_run.last_result.as_deref(), Some("同步完成"));
         assert_eq!(after_run.last_error.as_deref(), None);
         assert!(after_run.next_sync_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn github_sync_settings_round_trip_and_redacts_token() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+
+        let saved = repository
+            .save_github_sync_settings(&super::GitHubSyncSettingsInput {
+                enabled: true,
+                owner: "rick".to_string(),
+                repo: "tokenscope-sync".to_string(),
+                branch: "main".to_string(),
+                path_prefix: "tokenscope-sync".to_string(),
+                token: Some("ghp_secret_token_value".to_string()),
+                sync_password: Some("sync-password".to_string()),
+            })
+            .await
+            .expect("settings save");
+
+        assert!(saved.token_configured);
+        assert!(saved.sync_password_configured);
+        assert_eq!(saved.token_redacted.as_deref(), Some("ghp_...alue"));
+        assert!(repository
+            .github_sync_secret("token")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn github_sync_shard_state_round_trips_by_device_kind_and_date() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+        repository
+            .record_github_sync_shard(&super::GitHubSyncShardStateInput {
+                device_id: "device-a".to_string(),
+                shard_kind: "day".to_string(),
+                shard_date: Some("2026-06-05".to_string()),
+                content_hash: "abc123".to_string(),
+                github_path:
+                    "tokenscope-sync/v1/devices/device-a/days/2026-06-05.tokenscope.zst.enc"
+                        .to_string(),
+                imported_at: Some("2026-06-05T10:00:00+08:00".to_string()),
+            })
+            .await
+            .expect("shard records");
+
+        let state = repository
+            .github_sync_shard("device-a", "day", Some("2026-06-05"))
+            .await
+            .expect("shard reads")
+            .expect("shard exists");
+
+        assert_eq!(state.content_hash, "abc123");
     }
 
     #[tokio::test]

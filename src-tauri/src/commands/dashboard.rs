@@ -444,7 +444,7 @@ pub async fn save_sync_settings(
         .repository
         .save_sync_settings(&SyncSettingsInput {
             enabled: input.enabled,
-            interval_minutes: input.interval_minutes.clamp(5, 1440),
+            interval_minutes: input.interval_minutes.clamp(1, 1440),
             sync_on_startup: input.sync_on_startup,
         })
         .await

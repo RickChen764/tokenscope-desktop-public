@@ -122,6 +122,17 @@ test("daily usage series groups tokens and cost by local date", () => {
   assert.equal(row.cost_currency, "USD");
 });
 
+test("github sync migration stores remote shard state", () => {
+  const migration = readProjectFile("src-tauri/migrations/0007_github_sync.sql");
+
+  assert.ok(migration.includes("CREATE TABLE IF NOT EXISTS github_sync_shard"));
+  assert.ok(migration.includes("device_id TEXT NOT NULL"));
+  assert.ok(migration.includes("shard_kind TEXT NOT NULL"));
+  assert.ok(migration.includes("shard_date TEXT"));
+  assert.ok(migration.includes("content_hash TEXT NOT NULL"));
+  assert.ok(migration.includes("UNIQUE(device_id, shard_kind, shard_date)"));
+});
+
 test("top dimension queries rank providers, agents, models, workflows, projects, and sessions", () => {
   const db = openSeededDatabase();
   const from = "1970-01-01";

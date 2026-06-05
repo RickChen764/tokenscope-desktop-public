@@ -130,7 +130,7 @@ test("settings page exposes background auto sync settings without proxy setup", 
   assert.ok(settingsPage.includes("启用后台自动同步"));
   assert.ok(settingsPage.includes("同步间隔"));
   assert.ok(settingsPage.includes("SYNC_INTERVAL_VALUES"));
-  assert.ok(settingsPage.includes("[15, 30, 60, 180]"));
+  assert.ok(settingsPage.includes("[1, 5, 15, 30, 60]"));
   assert.ok(settingsPage.includes('t("分钟")'));
   assert.ok(settingsPage.includes("启动后立即同步"));
   assert.ok(settingsPage.includes("最近自动同步"));
@@ -761,6 +761,60 @@ test("settings page supports device dataset packages for multi-device merge", ()
   assert.ok(tauriEntrypoint.includes("open_export_folder"));
   assert.ok(settingsCommands.includes("std::env::temp_dir()"));
   assert.ok(settingsCommands.includes("export_dir: Option<String>"));
+});
+
+test("settings page exposes github encrypted sync controls", () => {
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const githubSyncPanel = readProjectFile("src/components/GitHubSyncPanel.tsx");
+  const dashboardService = readProjectFile("src/services/dashboard.ts");
+  const dashboardTypes = readProjectFile("src/types/dashboard.ts");
+  const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
+  const settingsCommands = readProjectFile("src-tauri/src/commands/settings.rs");
+  const styles = readProjectFile("src/styles.css");
+
+  assert.ok(settingsPage.includes("GitHubSyncPanel"));
+  assert.ok(githubSyncPanel.includes("GitHub 同步"));
+  assert.ok(githubSyncPanel.includes("personal access token"));
+  assert.ok(githubSyncPanel.includes("同步密码"));
+  assert.ok(githubSyncPanel.includes("bootstrap"));
+  assert.ok(githubSyncPanel.includes("GitHub 只保存加密文件"));
+  assert.ok(githubSyncPanel.includes("立即同步"));
+  assert.ok(githubSyncPanel.includes("测试连接"));
+  assert.ok(githubSyncPanel.includes("同步仓库向导"));
+  assert.ok(githubSyncPanel.includes("此版本不会自动创建仓库"));
+  assert.ok(githubSyncPanel.includes("Contents: Read and write"));
+  assert.ok(githubSyncPanel.includes("保存并初始化同步仓库"));
+  assert.ok(githubSyncPanel.includes("handleInitializeRepository"));
+
+  assert.ok(dashboardService.includes("get_github_sync_settings"));
+  assert.ok(dashboardService.includes("save_github_sync_settings"));
+  assert.ok(dashboardService.includes("test_github_sync_connection"));
+  assert.ok(dashboardService.includes("run_github_sync_once"));
+  assert.ok(dashboardTypes.includes("interface GitHubSyncSettings"));
+  assert.ok(dashboardTypes.includes("interface GitHubSyncRunResult"));
+
+  assert.ok(tauriEntrypoint.includes("get_github_sync_settings"));
+  assert.ok(tauriEntrypoint.includes("save_github_sync_settings"));
+  assert.ok(tauriEntrypoint.includes("test_github_sync_connection"));
+  assert.ok(tauriEntrypoint.includes("run_github_sync_once"));
+  assert.ok(settingsCommands.includes("github_sync"));
+  assert.ok(styles.includes(".github-sync-panel"));
+  assert.ok(styles.includes(".github-sync-wizard"));
+  assert.ok(styles.includes(".github-sync-form"));
+  assert.ok(styles.includes(".github-sync-status"));
+});
+
+test("background sync interval allows one minute for github sync freshness", () => {
+  const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
+  const dashboardCommand = readProjectFile("src-tauri/src/commands/dashboard.rs");
+  const repository = readProjectFile("src-tauri/src/db/repository.rs");
+  const dashboardService = readProjectFile("src/services/dashboard.ts");
+
+  assert.ok(settingsPage.includes("const SYNC_INTERVAL_VALUES = [1, 5, 15, 30, 60]"));
+  assert.ok(dashboardCommand.includes("input.interval_minutes.clamp(1, 1440)"));
+  assert.ok(repository.includes("input.interval_minutes.clamp(1, 1440)"));
+  assert.ok(repository.includes(".clamp(1, 1440)"));
+  assert.ok(dashboardService.includes("Math.max(1, Math.round(parsed))"));
 });
 
 test("windows release binary is configured without a console window", () => {

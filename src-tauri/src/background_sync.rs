@@ -5,6 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Local};
 
 use crate::db::{SyncRunResult, TokenScopeRepository};
+use crate::github_sync;
 use crate::importers::{import_detected_agents, AgentImportResult};
 
 #[derive(Clone, Default)]
@@ -70,6 +71,9 @@ pub async fn run_once(
         .map_err(|err| err.to_string());
     runtime.finish();
     record_result?;
+    if !failed {
+        let _ = github_sync::engine::run_once(repository, false).await;
+    }
 
     Ok(SyncRunResult {
         status: status.to_string(),

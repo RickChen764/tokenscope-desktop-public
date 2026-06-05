@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentSourcesPanel } from "./AgentSourcesPanel";
 import { CustomImportersPanel } from "./CustomImportersPanel";
 import { DeviceDatasetsPanel } from "./DeviceDatasetsPanel";
+import { GitHubSyncPanel } from "./GitHubSyncPanel";
 import { ToastNotice, type ToastNoticeValue } from "./ToastNotice";
 import {
   checkForAppUpdate,
@@ -26,7 +27,7 @@ import type {
 } from "../types/dashboard";
 import { formatBytes, formatDateTime } from "../utils/format";
 
-const SYNC_INTERVAL_VALUES = [15, 30, 60, 180];
+const SYNC_INTERVAL_VALUES = [1, 5, 15, 30, 60];
 
 const defaultSyncDraft: SyncSettingsInput = {
   enabled: true,
@@ -656,6 +657,7 @@ export function SettingsPage({
               </button>
             </div>
           </section>
+          <GitHubSyncPanel onNotice={setNotice} />
         </div>
       </section>
 

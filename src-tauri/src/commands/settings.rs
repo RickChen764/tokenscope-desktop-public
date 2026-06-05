@@ -3,8 +3,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
-use crate::db::{DevicePackageImportResult, ExternalDataset, LlmCallFilters};
+use crate::db::{
+    DevicePackageImportResult, ExternalDataset, GitHubSyncConnectionTestResult,
+    GitHubSyncRunResult, GitHubSyncSettings, GitHubSyncSettingsInput, LlmCallFilters,
+};
 use crate::device_packages;
+use crate::github_sync;
 use crate::AppState;
 
 #[tauri::command]
@@ -99,6 +103,50 @@ pub async fn remove_external_dataset(
         .remove_external_dataset(&dataset_id)
         .await
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn get_github_sync_settings(
+    state: State<'_, AppState>,
+) -> Result<GitHubSyncSettings, String> {
+    state
+        .repository
+        .get_github_sync_settings()
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn save_github_sync_settings(
+    state: State<'_, AppState>,
+    input: GitHubSyncSettingsInput,
+) -> Result<GitHubSyncSettings, String> {
+    state
+        .repository
+        .save_github_sync_settings(&input)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn test_github_sync_connection(
+    state: State<'_, AppState>,
+) -> Result<GitHubSyncConnectionTestResult, String> {
+    github_sync::engine::test_connection(&state.repository).await
+}
+
+#[tauri::command]
+pub async fn run_github_sync_once(
+    state: State<'_, AppState>,
+) -> Result<GitHubSyncRunResult, String> {
+    github_sync::engine::run_once(&state.repository, false).await
+}
+
+#[tauri::command]
+pub async fn force_github_sync_bootstrap_upload(
+    state: State<'_, AppState>,
+) -> Result<GitHubSyncRunResult, String> {
+    github_sync::engine::run_once(&state.repository, true).await
 }
 
 fn default_export_dir() -> PathBuf {

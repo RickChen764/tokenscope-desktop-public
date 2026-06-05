@@ -34,61 +34,61 @@ struct DevicePackageDevice {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-struct DevicePackageCall {
-    source_key: String,
-    external_id: String,
-    id: String,
-    started_at: String,
-    ended_at: Option<String>,
-    date_local: String,
-    provider: String,
-    provider_config_id: Option<String>,
-    api_type: Option<String>,
-    model_requested: Option<String>,
-    model_response: Option<String>,
-    agent_id: Option<String>,
-    agent_name: Option<String>,
-    agent_run_id: Option<String>,
-    workflow_id: Option<String>,
-    workflow_step: Option<String>,
-    session_id: Option<String>,
-    trace_id: Option<String>,
-    span_id: Option<String>,
-    parent_span_id: Option<String>,
-    project_id: Option<String>,
-    user_id: Option<String>,
-    environment: Option<String>,
-    feature: Option<String>,
-    input_tokens: i64,
-    output_tokens: i64,
-    cached_input_tokens: i64,
-    cache_write_input_tokens: i64,
-    reasoning_output_tokens: i64,
-    audio_input_tokens: i64,
-    audio_output_tokens: i64,
-    image_input_tokens: i64,
-    image_output_tokens: i64,
-    total_tokens: i64,
-    total_billable_tokens: i64,
-    request_count: i64,
-    tool_call_count: i64,
-    retry_count: i64,
-    latency_ms: Option<i64>,
-    http_status: Option<i64>,
-    status: String,
-    error_type: Option<String>,
-    error_message: Option<String>,
-    estimated_cost_usd: f64,
+pub(crate) struct DevicePackageCall {
+    pub(crate) source_key: String,
+    pub(crate) external_id: String,
+    pub(crate) id: String,
+    pub(crate) started_at: String,
+    pub(crate) ended_at: Option<String>,
+    pub(crate) date_local: String,
+    pub(crate) provider: String,
+    pub(crate) provider_config_id: Option<String>,
+    pub(crate) api_type: Option<String>,
+    pub(crate) model_requested: Option<String>,
+    pub(crate) model_response: Option<String>,
+    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_name: Option<String>,
+    pub(crate) agent_run_id: Option<String>,
+    pub(crate) workflow_id: Option<String>,
+    pub(crate) workflow_step: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) trace_id: Option<String>,
+    pub(crate) span_id: Option<String>,
+    pub(crate) parent_span_id: Option<String>,
+    pub(crate) project_id: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) environment: Option<String>,
+    pub(crate) feature: Option<String>,
+    pub(crate) input_tokens: i64,
+    pub(crate) output_tokens: i64,
+    pub(crate) cached_input_tokens: i64,
+    pub(crate) cache_write_input_tokens: i64,
+    pub(crate) reasoning_output_tokens: i64,
+    pub(crate) audio_input_tokens: i64,
+    pub(crate) audio_output_tokens: i64,
+    pub(crate) image_input_tokens: i64,
+    pub(crate) image_output_tokens: i64,
+    pub(crate) total_tokens: i64,
+    pub(crate) total_billable_tokens: i64,
+    pub(crate) request_count: i64,
+    pub(crate) tool_call_count: i64,
+    pub(crate) retry_count: i64,
+    pub(crate) latency_ms: Option<i64>,
+    pub(crate) http_status: Option<i64>,
+    pub(crate) status: String,
+    pub(crate) error_type: Option<String>,
+    pub(crate) error_message: Option<String>,
+    pub(crate) estimated_cost_usd: f64,
     #[serde(default = "default_cost_currency")]
-    cost_currency: String,
-    provider_reported_cost_usd: Option<f64>,
-    reconciled_cost_usd: Option<f64>,
-    cost_source: Option<String>,
-    usage_source: Option<String>,
-    request_hash: Option<String>,
-    response_hash: Option<String>,
-    prompt_template_id: Option<String>,
-    created_at: String,
+    pub(crate) cost_currency: String,
+    pub(crate) provider_reported_cost_usd: Option<f64>,
+    pub(crate) reconciled_cost_usd: Option<f64>,
+    pub(crate) cost_source: Option<String>,
+    pub(crate) usage_source: Option<String>,
+    pub(crate) request_hash: Option<String>,
+    pub(crate) response_hash: Option<String>,
+    pub(crate) prompt_template_id: Option<String>,
+    pub(crate) created_at: String,
 }
 
 pub async fn export_device_dataset_package(
@@ -194,7 +194,7 @@ pub async fn import_device_dataset_package(
     })
 }
 
-async fn exportable_local_calls(
+pub(crate) async fn exportable_local_calls(
     repository: &TokenScopeRepository,
 ) -> Result<Vec<DevicePackageCall>, sqlx::Error> {
     query_as::<_, DevicePackageCall>(
@@ -287,7 +287,7 @@ fn validate_package(package: &DeviceDatasetPackage) -> Result<(), String> {
 }
 
 impl DevicePackageCall {
-    fn into_import_call(self, dataset_id: &str) -> Option<ExternalDatasetImportCall> {
+    pub(crate) fn into_import_call(self, dataset_id: &str) -> Option<ExternalDatasetImportCall> {
         if self.source_key.trim().is_empty()
             || self.external_id.trim().is_empty()
             || self.started_at.trim().is_empty()
@@ -369,14 +369,14 @@ impl DevicePackageCall {
     }
 }
 
-fn local_device_name() -> String {
+pub(crate) fn local_device_name() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .or_else(|_| std::env::var("USERDOMAIN"))
         .unwrap_or_else(|_| "local-device".to_string())
 }
 
-fn dataset_id_for_device(device_id: &str) -> String {
+pub(crate) fn dataset_id_for_device(device_id: &str) -> String {
     format!("device-{}", safe_id_segment(device_id))
 }
 
@@ -389,7 +389,7 @@ fn normalize_package_currency(value: &str) -> String {
     }
 }
 
-fn summarize_cost_currency<'a>(currencies: impl Iterator<Item = &'a str>) -> String {
+pub(crate) fn summarize_cost_currency<'a>(currencies: impl Iterator<Item = &'a str>) -> String {
     let mut current: Option<String> = None;
     for currency in currencies {
         let currency = normalize_package_currency(currency);

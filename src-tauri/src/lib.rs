@@ -2,6 +2,7 @@ mod background_sync;
 mod commands;
 mod db;
 mod device_packages;
+mod github_sync;
 mod importers;
 pub mod pricing;
 mod proxy;
@@ -93,7 +94,12 @@ pub fn run() {
             commands::settings::import_device_dataset_package,
             commands::settings::list_external_datasets,
             commands::settings::open_export_folder,
-            commands::settings::remove_external_dataset
+            commands::settings::remove_external_dataset,
+            commands::settings::get_github_sync_settings,
+            commands::settings::save_github_sync_settings,
+            commands::settings::test_github_sync_connection,
+            commands::settings::run_github_sync_once,
+            commands::settings::force_github_sync_bootstrap_upload
         ])
         .run(tauri::generate_context!())
         .expect("error while running TokenScope Desktop");

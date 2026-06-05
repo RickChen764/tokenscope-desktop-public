@@ -4544,6 +4544,83 @@ h2 {
   justify-content: flex-end;
 }
 
+.github-sync-panel {
+  border-top: 1px solid #333333 !important;
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.github-sync-panel .panel-heading {
+  margin-bottom: 0;
+}
+
+.github-sync-wizard {
+  align-items: start;
+  border-top: 1px solid #333333;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.4fr) auto;
+  padding-top: 14px;
+}
+
+.github-sync-wizard h3 {
+  color: #f3f3f3;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0 0 6px;
+}
+
+.github-sync-wizard p,
+.github-sync-wizard ol {
+  color: #c7c7c7;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.github-sync-wizard ol {
+  display: grid;
+  gap: 4px;
+  padding-left: 20px;
+}
+
+.github-sync-wizard .primary {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.github-sync-form {
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.github-sync-status {
+  border-top: 1px solid #333333;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding-top: 14px;
+}
+
+.github-sync-status strong {
+  overflow-wrap: anywhere;
+}
+
+.github-sync-panel .settings-footnote {
+  border-top: 1px solid #333333;
+  margin: 0;
+  padding-top: 14px;
+}
+
+.github-sync-panel .form-actions {
+  justify-content: flex-end;
+}
+
+.compact-switch {
+  align-self: start;
+  min-width: 120px;
+}
+
 .source-row {
   grid-template-columns: minmax(300px, 0.95fr) minmax(480px, 1.05fr);
 }
@@ -4595,6 +4672,19 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .github-sync-wizard {
+    grid-template-columns: 1fr;
+  }
+
+  .github-sync-wizard .primary {
+    justify-self: start;
+  }
+
+  .github-sync-form,
+  .github-sync-status {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .sync-control-grid {
     border-bottom: 1px solid #333333;
     border-right: 0;
@@ -4628,6 +4718,16 @@ h2 {
   .dimension-list-grid,
   .compact-summary {
     grid-template-columns: 1fr;
+  }
+
+  .github-sync-form,
+  .github-sync-status {
+    grid-template-columns: 1fr;
+  }
+
+  .github-sync-wizard .primary {
+    justify-self: stretch;
+    white-space: normal;
   }
 
   .dimension-list-grid .overview-rank-card {

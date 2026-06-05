@@ -30,6 +30,10 @@ import type {
   CustomImporterRunResult,
   DevicePackageImportResult,
   ExternalDataset,
+  GitHubSyncConnectionTestResult,
+  GitHubSyncRunResult,
+  GitHubSyncSettings,
+  GitHubSyncSettingsInput,
 } from "../types/dashboard";
 
 declare global {
@@ -170,7 +174,25 @@ function normalizeSyncInterval(value: unknown) {
     return 30;
   }
 
-  return Math.min(1440, Math.max(5, Math.round(parsed)));
+  return Math.min(1440, Math.max(1, Math.round(parsed)));
+}
+
+function defaultGitHubSyncSettings(): GitHubSyncSettings {
+  return {
+    enabled: false,
+    owner: "",
+    repo: "",
+    branch: "main",
+    path_prefix: "tokenscope-sync",
+    token_configured: false,
+    token_redacted: null,
+    sync_password_configured: false,
+    bootstrap_uploaded: false,
+    last_upload_at: null,
+    last_import_at: null,
+    last_status: null,
+    last_error: null,
+  };
 }
 
 function nextBrowserSyncAt(settings: SyncSettings) {
@@ -594,6 +616,73 @@ export async function runBackgroundSyncOnce() {
   }
 
   return invoke<SyncSettings>("run_background_sync_once");
+}
+
+export function getGitHubSyncSettings() {
+  return invokeOrFallback<GitHubSyncSettings>(
+    "get_github_sync_settings",
+    {},
+    defaultGitHubSyncSettings(),
+  );
+}
+
+export async function saveGitHubSyncSettings(settings: GitHubSyncSettingsInput) {
+  if (!isDesktopRuntime()) {
+    return {
+      ...defaultGitHubSyncSettings(),
+      ...settings,
+      token_configured: Boolean(settings.token?.trim()),
+      token_redacted: settings.token ? "已配置" : null,
+      sync_password_configured: Boolean(settings.sync_password?.trim()),
+    };
+  }
+
+  return invoke<GitHubSyncSettings>("save_github_sync_settings", { input: settings });
+}
+
+export function testGitHubSyncConnection() {
+  return invokeOrFallback<GitHubSyncConnectionTestResult>(
+    "test_github_sync_connection",
+    {},
+    {
+      status: "browser-preview",
+      message: tr("浏览器预览环境无法测试 GitHub 连接。"),
+    },
+  );
+}
+
+export function runGitHubSyncOnce() {
+  return invokeOrFallback<GitHubSyncRunResult>(
+    "run_github_sync_once",
+    {},
+    {
+      status: "browser-preview",
+      message: tr("浏览器预览环境已跳过 GitHub 同步。"),
+      uploaded_shards: 0,
+      downloaded_shards: 0,
+      imported: 0,
+      skipped: 0,
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+    },
+  );
+}
+
+export function forceGitHubSyncBootstrapUpload() {
+  return invokeOrFallback<GitHubSyncRunResult>(
+    "force_github_sync_bootstrap_upload",
+    {},
+    {
+      status: "browser-preview",
+      message: tr("浏览器预览环境已跳过 GitHub bootstrap 重传。"),
+      uploaded_shards: 0,
+      downloaded_shards: 0,
+      imported: 0,
+      skipped: 0,
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+    },
+  );
 }
 
 function toAppUpdateInfo(update: Update | null): AppUpdateInfo {

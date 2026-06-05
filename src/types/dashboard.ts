@@ -65,6 +65,44 @@ export interface SyncSettings extends SyncSettingsInput {
   last_error: string | null;
 }
 
+export interface GitHubSyncSettingsInput {
+  enabled: boolean;
+  owner: string;
+  repo: string;
+  branch: string;
+  path_prefix: string;
+  token?: string | null;
+  sync_password?: string | null;
+}
+
+export interface GitHubSyncSettings
+  extends Omit<GitHubSyncSettingsInput, "token" | "sync_password"> {
+  token_configured: boolean;
+  token_redacted: string | null;
+  sync_password_configured: boolean;
+  bootstrap_uploaded: boolean;
+  last_upload_at: string | null;
+  last_import_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+}
+
+export interface GitHubSyncConnectionTestResult {
+  status: string;
+  message: string;
+}
+
+export interface GitHubSyncRunResult {
+  status: string;
+  message: string;
+  uploaded_shards: number;
+  downloaded_shards: number;
+  imported: number;
+  skipped: number;
+  started_at: string;
+  finished_at: string;
+}
+
 export type AppUpdateStatus =
   | "idle"
   | "checking"
