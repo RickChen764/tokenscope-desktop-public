@@ -41,6 +41,7 @@ declare global {
 export type AgentImportMode = "incremental" | "full";
 
 let pendingAppUpdate: Update | null = null;
+let appUpdateCheckPromise: Promise<AppUpdateInfo> | null = null;
 const SYNC_SETTINGS_STORAGE_KEY = "tokenscope.syncSettings";
 const APP_UPDATE_STATE_STORAGE_KEY = "tokenscope.appUpdateInfo";
 export const APP_UPDATE_INFO_EVENT = "tokenscope:app-update-info";
@@ -592,7 +593,7 @@ function toAppUpdateInfo(update: Update | null): AppUpdateInfo {
   };
 }
 
-export async function checkForAppUpdate() {
+async function runAppUpdateCheck() {
   if (!isDesktopRuntime()) {
     return writeStoredAppUpdateInfo({
       available: false,
@@ -618,6 +619,19 @@ export async function checkForAppUpdate() {
       error: stringifyError(err),
     });
     throw err;
+  }
+}
+
+export async function checkForAppUpdate() {
+  if (appUpdateCheckPromise) {
+    return appUpdateCheckPromise;
+  }
+
+  appUpdateCheckPromise = runAppUpdateCheck();
+  try {
+    return await appUpdateCheckPromise;
+  } finally {
+    appUpdateCheckPromise = null;
   }
 }
 

@@ -13,6 +13,7 @@ import { ToastNotice, type ToastNoticeValue } from "../components/ToastNotice";
 import { useI18n } from "../i18n";
 import {
   APP_UPDATE_INFO_EVENT,
+  checkForAppUpdate,
   clearDemoData,
   getDailyUsageSeries,
   getDashboardSummaryForDates,
@@ -73,6 +74,7 @@ const isTokenPulseWindow =
 const isTokenPulseDetailWindow =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("tokenPulseDetail") === "1";
+const APP_UPDATE_AUTO_CHECK_INTERVAL_MS = 30 * 60_000;
 
 function getInitialAppUpdateInfo() {
   const storedInfo = getStoredAppUpdateInfo();
@@ -236,6 +238,42 @@ export function App() {
 
     window.addEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
     return () => window.removeEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
+  }, []);
+
+  useEffect(() => {
+    let isDisposed = false;
+    let isRunning = false;
+
+    async function runScheduledAppUpdateCheck() {
+      if (isDisposed || isRunning) {
+        return;
+      }
+
+      const currentStatus = getStoredAppUpdateInfo().status;
+      if (["checking", "downloading", "installing"].includes(currentStatus)) {
+        return;
+      }
+
+      isRunning = true;
+      try {
+        await checkForAppUpdate();
+      } catch {
+        // Automatic checks update stored state; the Settings page surfaces details.
+      } finally {
+        isRunning = false;
+      }
+    }
+
+    void runScheduledAppUpdateCheck();
+    const intervalId = window.setInterval(
+      () => void runScheduledAppUpdateCheck(),
+      APP_UPDATE_AUTO_CHECK_INTERVAL_MS,
+    );
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   async function handleInstallAppUpdate() {
