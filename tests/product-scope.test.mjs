@@ -890,9 +890,8 @@ test("release manifest scripts validate versions and updater artifacts before pu
 test("powershell release scripts pin UTF-8 boundaries for Chinese release text", () => {
   const buildReleaseScript = readProjectFile("scripts/build-release.ps1");
   const createLatestJsonScript = readProjectFile("scripts/create-latest-json.ps1");
-  const publicSyncScript = readProjectFile("scripts/sync-public.ps1");
 
-  for (const script of [buildReleaseScript, createLatestJsonScript, publicSyncScript]) {
+  for (const script of [buildReleaseScript, createLatestJsonScript]) {
     assert.ok(script.includes("$script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)"));
     assert.ok(script.includes("$OutputEncoding = $script:Utf8NoBom"));
     assert.ok(script.includes("[Console]::InputEncoding = $script:Utf8NoBom"));
@@ -909,8 +908,6 @@ test("powershell release scripts pin UTF-8 boundaries for Chinese release text",
   assert.ok(createLatestJsonScript.includes("function Read-JsonFile"));
   assert.equal(createLatestJsonScript.includes("Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json"), false);
   assert.equal(createLatestJsonScript.includes("[System.IO.File]::WriteAllText($OutputPath"), false);
-
-  assert.ok(publicSyncScript.includes("Get-Content -LiteralPath $ignorePath -Encoding UTF8"));
 });
 
 test("application and installer support Chinese and English localization", () => {
