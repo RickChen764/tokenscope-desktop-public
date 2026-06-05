@@ -74,9 +74,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if (-not $SkipLatestJson) {
-  $latestJsonArgs = @()
+  $latestJsonArgs = @{}
   if ($NotesPath) {
-    $latestJsonArgs += @("-NotesPath", $NotesPath)
+    $latestJsonArgs.NotesPath = $NotesPath
   }
 
   & (Join-Path $PSScriptRoot "create-latest-json.ps1") @latestJsonArgs
