@@ -535,7 +535,7 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(trayStatus.includes("format_token_pulse_tooltip"));
   assert.ok(trayStatus.includes("TOKEN_PULSE_DETAIL_HIDE_DELAY_MS"));
   assert.ok(trayStatus.includes("pub fn set_token_pulse_detail_hovered"));
-  assert.ok(trayStatus.includes("TokenPulseHoverState"));
+  assert.ok(trayStatus.includes("TokenPulseInteractionState"));
   assert.ok(trayStatus.includes("get_webview_window(TOKEN_PULSE_DETAIL_WINDOW_LABEL)"));
   assert.ok(trayStatus.includes('hovered && source == "mini"'));
   assert.ok(trayStatus.includes(".show()"));
@@ -611,6 +611,79 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(defaultCapability.includes('"token-pulse-detail"'));
   assert.ok(defaultCapability.includes("core:window:allow-set-size"));
   assert.ok(defaultCapability.includes("core:window:allow-set-position"));
+});
+
+test("token pulse tray and mini window expose menus and avoid fullscreen overlays", () => {
+  const trayStatus = readProjectFile("src-tauri/src/tray_status.rs");
+  const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
+  const dashboardService = readProjectFile("src/services/dashboard.ts");
+  const tokenPulseWindow = readProjectFile("src/components/TokenPulseWindow.tsx");
+  const defaultCapability = readProjectFile("src-tauri/capabilities/default.json");
+
+  assert.ok(trayStatus.includes("MenuBuilder"));
+  assert.ok(trayStatus.includes("MenuItemBuilder"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_MENU_OPEN_MAIN"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_MENU_TOGGLE_VISIBLE"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_MENU_EXIT"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_CONTEXT_OPEN_MAIN"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_CONTEXT_HIDE"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_CONTEXT_LOCK_POSITION"));
+  assert.ok(trayStatus.includes("show_menu_on_left_click(false)"));
+  assert.ok(trayStatus.includes(".menu(&tray_menu)"));
+  assert.ok(trayStatus.includes("pub fn handle_token_pulse_menu_event"));
+  assert.ok(tauriEntrypoint.includes(".on_menu_event(|app, event| tray_status::handle_token_pulse_menu_event(app, event))"));
+  assert.ok(trayStatus.includes("CheckMenuItemBuilder::with_id(TOKEN_PULSE_MENU_TOGGLE_VISIBLE"));
+  assert.ok(trayStatus.includes("token_pulse_window_currently_visible(manager.app_handle())"));
+  assert.ok(trayStatus.includes("set_token_pulse_tray_toggle_checked"));
+  assert.ok(trayStatus.includes("set_checked(visible)"));
+  assert.ok(trayStatus.includes("set_menu(Some(tray_menu))"));
+  assert.ok(trayStatus.includes("toggle_token_pulse_window"));
+  assert.ok(trayStatus.includes("token_pulse_window_currently_visible(app)"));
+  assert.ok(trayStatus.includes("hide_token_pulse_window"));
+  assert.ok(trayStatus.includes("window.unminimize()"));
+  assert.ok(trayStatus.includes("app.webview_windows()"));
+  assert.ok(trayStatus.includes("title == MAIN_WINDOW_TITLE"));
+  assert.ok(trayStatus.includes("create_main_window(app)"));
+  assert.ok(trayStatus.includes("exit_token_scope"));
+
+  assert.ok(trayStatus.includes("TOKEN_PULSE_LOCKED_SETTING"));
+  assert.ok(trayStatus.includes("TokenPulseInteractionState"));
+  assert.ok(trayStatus.includes("position_locked"));
+  assert.ok(trayStatus.includes("set_token_pulse_position_locked"));
+  assert.ok(trayStatus.includes("get_token_pulse_position_locked"));
+  assert.ok(trayStatus.includes("show_token_pulse_context_menu"));
+  assert.ok(trayStatus.includes("popup_menu"));
+  assert.ok(trayStatus.includes(".checked(token_pulse_position_locked(manager.app_handle()))"));
+  assert.ok(trayStatus.includes("if token_pulse_position_locked(&app)"));
+
+  assert.ok(trayStatus.includes("spawn_token_pulse_fullscreen_guard"));
+  assert.ok(trayStatus.includes("is_probably_fullscreen"));
+  assert.ok(trayStatus.includes("hide_for_fullscreen"));
+  assert.ok(trayStatus.includes("TOKEN_PULSE_FULLSCREEN_GUARD_SECONDS"));
+  assert.ok(trayStatus.includes("was_visible_before_fullscreen"));
+  assert.ok(trayStatus.includes("hide_token_pulse_detail_window"));
+
+  assert.ok(tauriEntrypoint.includes("tray_status::show_token_pulse_context_menu"));
+  assert.ok(tauriEntrypoint.includes("tray_status::get_token_pulse_position_locked"));
+  assert.ok(tauriEntrypoint.includes("tray_status::set_token_pulse_position_locked"));
+
+  assert.ok(dashboardService.includes("showTokenPulseContextMenu"));
+  assert.ok(dashboardService.includes("show_token_pulse_context_menu"));
+  assert.ok(dashboardService.includes("getTokenPulsePositionLocked"));
+  assert.ok(dashboardService.includes("get_token_pulse_position_locked"));
+  assert.ok(dashboardService.includes("setTokenPulsePositionLocked"));
+  assert.ok(dashboardService.includes("set_token_pulse_position_locked"));
+
+  assert.ok(tokenPulseWindow.includes("onContextMenu"));
+  assert.ok(tokenPulseWindow.includes("showTokenPulseContextMenu"));
+  assert.ok(tokenPulseWindow.includes("getTokenPulsePositionLocked"));
+  assert.ok(tokenPulseWindow.includes("setTokenPulsePositionLocked"));
+  assert.ok(tokenPulseWindow.includes("isPositionLocked"));
+  assert.ok(tokenPulseWindow.includes("if (isPositionLocked)"));
+  assert.ok(tokenPulseWindow.includes("token-pulse-locked"));
+
+  assert.ok(defaultCapability.includes("core:window:allow-show"));
+  assert.ok(defaultCapability.includes("core:window:allow-hide"));
 });
 
 test("settings page exposes configurable sqlite importers without proxy capture", () => {

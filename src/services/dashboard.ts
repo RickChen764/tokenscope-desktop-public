@@ -411,6 +411,22 @@ export function setTokenPulseDragging(dragging: boolean) {
   );
 }
 
+export function showTokenPulseContextMenu() {
+  return invokeOrFallback<void>("show_token_pulse_context_menu", {}, undefined);
+}
+
+export function getTokenPulsePositionLocked() {
+  return invokeOrFallback<boolean>("get_token_pulse_position_locked", {}, false);
+}
+
+export function setTokenPulsePositionLocked(locked: boolean) {
+  return invokeOrFallback<void>(
+    "set_token_pulse_position_locked",
+    { locked },
+    undefined,
+  );
+}
+
 export function getDimensionSummary(
   from: string,
   to: string,

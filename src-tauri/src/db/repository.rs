@@ -1451,6 +1451,42 @@ impl TokenScopeRepository {
             .await
     }
 
+    pub async fn token_pulse_position_locked(&self) -> Result<bool, sqlx::Error> {
+        Ok(self
+            .app_setting_value("token_pulse_position_locked")
+            .await?
+            .map(|value| value == "true")
+            .unwrap_or(false))
+    }
+
+    pub async fn save_token_pulse_position_locked(&self, locked: bool) -> Result<(), sqlx::Error> {
+        let now = Local::now().to_rfc3339();
+        self.upsert_app_setting_value(
+            "token_pulse_position_locked",
+            if locked { "true" } else { "false" },
+            &now,
+        )
+        .await
+    }
+
+    pub async fn token_pulse_visible(&self) -> Result<bool, sqlx::Error> {
+        Ok(self
+            .app_setting_value("token_pulse_visible")
+            .await?
+            .map(|value| value != "false")
+            .unwrap_or(true))
+    }
+
+    pub async fn save_token_pulse_visible(&self, visible: bool) -> Result<(), sqlx::Error> {
+        let now = Local::now().to_rfc3339();
+        self.upsert_app_setting_value(
+            "token_pulse_visible",
+            if visible { "true" } else { "false" },
+            &now,
+        )
+        .await
+    }
+
     pub async fn record_sync_run(
         &self,
         started_at: &str,
@@ -3766,6 +3802,41 @@ mod tests {
 
         assert_eq!(position.x, 128.5);
         assert_eq!(position.y, 720.25);
+    }
+
+    #[tokio::test]
+    async fn token_pulse_window_flags_round_trip_through_app_settings() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+
+        assert!(repository
+            .token_pulse_visible()
+            .await
+            .expect("token pulse visibility defaults"));
+        assert!(!repository
+            .token_pulse_position_locked()
+            .await
+            .expect("token pulse lock defaults"));
+
+        repository
+            .save_token_pulse_visible(false)
+            .await
+            .expect("token pulse visibility saves");
+        repository
+            .save_token_pulse_position_locked(true)
+            .await
+            .expect("token pulse lock saves");
+
+        assert!(!repository
+            .token_pulse_visible()
+            .await
+            .expect("token pulse visibility reloads"));
+        assert!(repository
+            .token_pulse_position_locked()
+            .await
+            .expect("token pulse lock reloads"));
     }
 
     #[tokio::test]

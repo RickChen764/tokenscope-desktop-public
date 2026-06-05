@@ -23,6 +23,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_menu_event(|app, event| tray_status::handle_token_pulse_menu_event(app, event))
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
@@ -57,6 +58,9 @@ pub fn run() {
             commands::dashboard::get_token_pulse,
             tray_status::set_token_pulse_detail_hovered,
             tray_status::set_token_pulse_dragging,
+            tray_status::show_token_pulse_context_menu,
+            tray_status::get_token_pulse_position_locked,
+            tray_status::set_token_pulse_position_locked,
             commands::dashboard::get_dimension_summary,
             commands::dashboard::get_dimension_daily_series,
             commands::dashboard::get_top_agents,

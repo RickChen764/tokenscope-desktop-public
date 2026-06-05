@@ -4713,6 +4713,10 @@ h2 {
   user-select: none;
 }
 
+.token-pulse-drag-handle.token-pulse-locked {
+  cursor: default;
+}
+
 .token-pulse-drag-handle.is-dragging,
 .token-pulse-drag-handle:active {
   border-color: #6d7783;

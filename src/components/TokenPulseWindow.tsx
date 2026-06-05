@@ -1,7 +1,14 @@
 import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { useI18n } from "../i18n";
-import { getTokenPulse, setTokenPulseDetailHovered, setTokenPulseDragging } from "../services/dashboard";
+import {
+  getTokenPulse,
+  getTokenPulsePositionLocked,
+  setTokenPulseDetailHovered,
+  setTokenPulseDragging,
+  setTokenPulsePositionLocked,
+  showTokenPulseContextMenu,
+} from "../services/dashboard";
 import type { TokenPulseSnapshot } from "../types/dashboard";
 import { formatCompactToken, formatInteger } from "../utils/format";
 
@@ -197,7 +204,7 @@ function useTokenPulseHover(source: TokenPulseHoverSource, disabled = false) {
   };
 }
 
-function useTokenPulseDrag() {
+function useTokenPulseDrag(isPositionLocked: boolean, refreshPositionLocked: () => Promise<boolean>) {
   const dragSessionRef = useRef<TokenPulseDragSession | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -232,6 +239,14 @@ function useTokenPulseDrag() {
 
   async function beginDrag(event: PointerEvent<HTMLElement>) {
     if (event.button !== 0) {
+      return;
+    }
+
+    if (isPositionLocked) {
+      return;
+    }
+
+    if (await refreshPositionLocked()) {
       return;
     }
 
@@ -291,19 +306,47 @@ function useTokenPulseDrag() {
   };
 }
 
+function useTokenPulsePositionLock() {
+  const [isPositionLocked, setIsPositionLocked] = useState(false);
+
+  async function refreshPositionLocked() {
+    const locked = await getTokenPulsePositionLocked();
+    setIsPositionLocked(locked);
+    return locked;
+  }
+
+  async function updatePositionLocked(locked: boolean) {
+    await setTokenPulsePositionLocked(locked);
+    setIsPositionLocked(locked);
+  }
+
+  useEffect(() => {
+    void refreshPositionLocked().catch(() => {
+      setIsPositionLocked(false);
+    });
+  }, []);
+
+  return { isPositionLocked, refreshPositionLocked, updatePositionLocked };
+}
+
 function TokenPulseMini({
   dragHandlers,
   isDragging,
+  isPositionLocked,
+  onContextMenu,
   viewModel,
 }: {
   dragHandlers: ReturnType<typeof useTokenPulseDrag>["dragHandlers"];
   isDragging: boolean;
+  isPositionLocked: boolean;
+  onContextMenu: (event: MouseEvent<HTMLElement>) => void;
   viewModel: TokenPulseViewModel;
 }) {
   return (
     <section
-      className={`token-pulse-mini token-pulse-drag-handle${isDragging ? " is-dragging" : ""}`}
+      className={`token-pulse-mini token-pulse-drag-handle${isDragging ? " is-dragging" : ""}${isPositionLocked ? " token-pulse-locked" : ""}`}
       data-tauri-drag-region
+      onContextMenu={onContextMenu}
       {...dragHandlers}
     >
       <span className="token-pulse-database-icon" aria-hidden="true" />
@@ -397,8 +440,18 @@ function TokenPulseDetail({ viewModel }: { viewModel: TokenPulseViewModel }) {
 export function TokenPulseWindow() {
   useTokenPulseBodyClass();
   const viewModel = useTokenPulseViewModel();
-  const { dragHandlers, isDragging } = useTokenPulseDrag();
+  const { isPositionLocked, refreshPositionLocked } = useTokenPulsePositionLock();
+  const { dragHandlers, isDragging } = useTokenPulseDrag(isPositionLocked, refreshPositionLocked);
   const hoverHandlers = useTokenPulseHover("mini", isDragging);
+
+  function handleContextMenu(event: MouseEvent<HTMLElement>) {
+    event.preventDefault();
+    void showTokenPulseContextMenu()
+      .then(() => refreshPositionLocked())
+      .catch(() => {
+        // Browser preview renders the window without desktop context menus.
+      });
+  }
 
   return (
     <main
@@ -406,7 +459,13 @@ export function TokenPulseWindow() {
       aria-label="今日 Token 用量"
       {...hoverHandlers}
     >
-      <TokenPulseMini dragHandlers={dragHandlers} isDragging={isDragging} viewModel={viewModel} />
+      <TokenPulseMini
+        dragHandlers={dragHandlers}
+        isDragging={isDragging}
+        isPositionLocked={isPositionLocked}
+        onContextMenu={handleContextMenu}
+        viewModel={viewModel}
+      />
     </main>
   );
 }
