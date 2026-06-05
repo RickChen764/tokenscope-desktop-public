@@ -6,6 +6,7 @@ mod importers;
 pub mod pricing;
 mod proxy;
 mod security;
+mod tray_status;
 pub mod usage;
 
 use db::TokenScopeRepository;
@@ -44,6 +45,7 @@ pub fn run() {
                 repository: repository.clone(),
                 sync_runtime: sync_runtime.clone(),
             });
+            tray_status::setup_token_pulse_tray(app, repository.clone())?;
             background_sync::spawn_background_sync_loop(repository.clone(), sync_runtime.clone());
             background_sync::spawn_launch_sync_if_enabled(repository, sync_runtime);
             Ok(())
@@ -52,6 +54,9 @@ pub fn run() {
             commands::dashboard::get_dashboard_summary,
             commands::dashboard::get_dashboard_summary_for_dates,
             commands::dashboard::get_daily_usage_series,
+            commands::dashboard::get_token_pulse,
+            tray_status::set_token_pulse_detail_hovered,
+            tray_status::set_token_pulse_dragging,
             commands::dashboard::get_dimension_summary,
             commands::dashboard::get_dimension_daily_series,
             commands::dashboard::get_top_agents,

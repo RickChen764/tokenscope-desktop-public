@@ -7,7 +7,7 @@ use crate::db::{
     AgentSourceStats, CallFilterOptions, CustomImporterPreview, CustomImporterProfile,
     CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint, DashboardSummary,
     DataHealthIssueRow, DataHealthSummary, LlmCallFilters, LlmCallPage, LlmCallRow, SyncSettings,
-    SyncSettingsInput, TopDimensionRow,
+    SyncSettingsInput, TokenPulseSnapshot, TopDimensionRow,
 };
 use crate::importers::codex::{import_default_codex_threads, CodexImportResult};
 use crate::importers::custom_sqlite::{
@@ -90,6 +90,17 @@ pub async fn get_daily_usage_series(
     state
         .repository
         .daily_usage_series(&from, &to, group_by.as_deref())
+        .await
+}
+
+#[tauri::command]
+pub async fn get_token_pulse(
+    state: State<'_, AppState>,
+    history_days: Option<i64>,
+) -> Result<TokenPulseSnapshot, String> {
+    state
+        .repository
+        .token_pulse_snapshot(history_days.unwrap_or(30))
         .await
 }
 

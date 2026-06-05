@@ -2,6 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop permissions for TokenScope",
-  "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "process:default", "updater:default"]
+  "windows": ["main", "token-pulse", "token-pulse-detail"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "dialog:default",
+    "process:default",
+    "updater:default"
+  ]
 }

@@ -34,6 +34,31 @@ pub struct DailyUsagePoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenPulseHourlyPoint {
+    pub hour: i64,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenPulseSnapshot {
+    pub today_local: String,
+    pub today_tokens: i64,
+    pub today_calls: i64,
+    pub yesterday_tokens: i64,
+    pub average_daily_tokens: f64,
+    pub history_days: i64,
+    pub ratio_to_average: Option<f64>,
+    pub remaining_to_average: i64,
+    pub hourly_tokens: Vec<TokenPulseHourlyPoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TokenPulseWindowPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopDimensionRow {
     pub dimension: String,
     pub calls: i64,

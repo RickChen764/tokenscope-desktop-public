@@ -122,6 +122,23 @@ export interface DailyUsagePoint {
   cost_currency: string;
 }
 
+export interface TokenPulseHourlyPoint {
+  hour: number;
+  total_tokens: number;
+}
+
+export interface TokenPulseSnapshot {
+  today_local: string;
+  today_tokens: number;
+  today_calls: number;
+  yesterday_tokens: number;
+  average_daily_tokens: number;
+  history_days: number;
+  ratio_to_average: number | null;
+  remaining_to_average: number;
+  hourly_tokens: TokenPulseHourlyPoint[];
+}
+
 export interface TopDimensionRow {
   dimension: string;
   calls: number;

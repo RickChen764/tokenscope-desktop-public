@@ -7,6 +7,7 @@ import { MiniSeriesChart } from "../components/MiniSeriesChart";
 import { ReportsPage } from "../components/ReportsPage";
 import { SettingsPage } from "../components/SettingsPage";
 import { SummaryCards } from "../components/SummaryCards";
+import { TokenPulseDetailWindow, TokenPulseWindow } from "../components/TokenPulseWindow";
 import { TopList } from "../components/TopList";
 import { ToastNotice, type ToastNoticeValue } from "../components/ToastNotice";
 import { useI18n } from "../i18n";
@@ -66,6 +67,13 @@ type DashboardView =
   | "calls"
   | "settings";
 
+const isTokenPulseWindow =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("tokenPulse") === "1";
+const isTokenPulseDetailWindow =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("tokenPulseDetail") === "1";
+
 function getInitialAppUpdateInfo() {
   const storedInfo = getStoredAppUpdateInfo();
 
@@ -95,6 +103,14 @@ function getInitialAppUpdateInfo() {
 }
 
 export function App() {
+  if (isTokenPulseWindow) {
+    return <TokenPulseWindow />;
+  }
+
+  if (isTokenPulseDetailWindow) {
+    return <TokenPulseDetailWindow />;
+  }
+
   const { numberLocale, t } = useI18n();
   const [view, setView] = useState<DashboardView>("overview");
   const [range, setRange] = useState<DashboardRangeMode>("30d");

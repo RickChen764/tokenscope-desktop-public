@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Duration, Local, NaiveDate};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{query, query_as, QueryBuilder, Row, Sqlite, SqlitePool};
@@ -18,7 +18,8 @@ use super::models::{
     DataHealthIssueRow, DataHealthIssueSummary, DataHealthSummary, ExternalDataset,
     ExternalDatasetImportCall, ExternalDatasetInput, LlmCallFilters, LlmCallPage, LlmCallRow,
     NewLlmCall, ProviderConfig, ProviderConfigInput, SyncSettings, SyncSettingsInput,
-    TopDimensionRow, UnknownPricingModel,
+    TokenPulseHourlyPoint, TokenPulseSnapshot, TokenPulseWindowPosition, TopDimensionRow,
+    UnknownPricingModel,
 };
 
 const DASHBOARD_SUMMARY_SQL: &str = include_str!("../../sql/dashboard_summary.sql");
@@ -557,6 +558,77 @@ impl TokenScopeRepository {
             .await
             .map(|rows| rows.into_iter().map(Into::into).collect())
             .map_err(|err| err.to_string())
+    }
+
+    pub async fn token_pulse_snapshot(
+        &self,
+        history_days: i64,
+    ) -> Result<TokenPulseSnapshot, String> {
+        self.token_pulse_snapshot_for_date(Local::now().date_naive(), history_days)
+            .await
+    }
+
+    pub async fn token_pulse_snapshot_for_date(
+        &self,
+        today: NaiveDate,
+        history_days: i64,
+    ) -> Result<TokenPulseSnapshot, String> {
+        let history_days = history_days.clamp(1, 90);
+        let today_local = today.to_string();
+        let yesterday = today - Duration::days(1);
+        let history_from = today - Duration::days(history_days);
+        let history_to = yesterday;
+
+        let today_summary = self
+            .dashboard_summary(&today_local, &today_local)
+            .await
+            .map_err(|err| err.to_string())?;
+        let yesterday_summary = self
+            .dashboard_summary(&yesterday.to_string(), &yesterday.to_string())
+            .await
+            .map_err(|err| err.to_string())?;
+        let history_series = self
+            .daily_usage_series(&history_from.to_string(), &history_to.to_string(), None)
+            .await?;
+        let history_tokens: i64 = history_series.iter().map(|point| point.total_tokens).sum();
+        let average_daily_tokens = history_tokens as f64 / history_days as f64;
+        let ratio_to_average = if average_daily_tokens > 0.0 {
+            Some(today_summary.total_tokens as f64 / average_daily_tokens)
+        } else {
+            None
+        };
+        let remaining_to_average =
+            (average_daily_tokens.round() as i64 - today_summary.total_tokens).max(0);
+        let hourly_tokens = query_as::<_, TokenPulseHourlyPointRow>(
+            r#"
+      SELECT
+        CAST(substr(started_at, 12, 2) AS INTEGER) AS hour,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens
+      FROM llm_call
+      WHERE date_local = ?1
+      GROUP BY hour
+      ORDER BY hour ASC
+      "#,
+        )
+        .bind(&today_local)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+        Ok(TokenPulseSnapshot {
+            today_local,
+            today_tokens: today_summary.total_tokens,
+            today_calls: today_summary.calls,
+            yesterday_tokens: yesterday_summary.total_tokens,
+            average_daily_tokens,
+            history_days,
+            ratio_to_average,
+            remaining_to_average,
+            hourly_tokens,
+        })
     }
 
     pub async fn dimension_daily_series(
@@ -1346,6 +1418,37 @@ impl TokenScopeRepository {
         .await?;
 
         self.get_sync_settings().await
+    }
+
+    pub async fn token_pulse_window_position(
+        &self,
+    ) -> Result<Option<TokenPulseWindowPosition>, sqlx::Error> {
+        let x = self
+            .app_setting_value("token_pulse_window_x")
+            .await?
+            .and_then(|value| value.parse::<f64>().ok());
+        let y = self
+            .app_setting_value("token_pulse_window_y")
+            .await?
+            .and_then(|value| value.parse::<f64>().ok());
+
+        Ok(match (x, y) {
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {
+                Some(TokenPulseWindowPosition { x, y })
+            }
+            _ => None,
+        })
+    }
+
+    pub async fn save_token_pulse_window_position(
+        &self,
+        position: TokenPulseWindowPosition,
+    ) -> Result<(), sqlx::Error> {
+        let now = Local::now().to_rfc3339();
+        self.upsert_app_setting_value("token_pulse_window_x", &position.x.to_string(), &now)
+            .await?;
+        self.upsert_app_setting_value("token_pulse_window_y", &position.y.to_string(), &now)
+            .await
     }
 
     pub async fn record_sync_run(
@@ -2181,6 +2284,21 @@ impl From<DailyUsagePointRow> for DailyUsagePoint {
 }
 
 #[derive(sqlx::FromRow)]
+struct TokenPulseHourlyPointRow {
+    hour: i64,
+    total_tokens: i64,
+}
+
+impl From<TokenPulseHourlyPointRow> for TokenPulseHourlyPoint {
+    fn from(row: TokenPulseHourlyPointRow) -> Self {
+        Self {
+            hour: row.hour,
+            total_tokens: row.total_tokens,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
 struct TopDimensionRowSql {
     dimension: String,
     calls: i64,
@@ -2580,8 +2698,12 @@ fn redact_secret(secret: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettingsInput, LlmCallFilters, ProviderConfigInput, TokenScopeRepository};
+    use super::{
+        AppSettingsInput, LlmCallFilters, ProviderConfigInput, TokenPulseWindowPosition,
+        TokenScopeRepository,
+    };
     use crate::pricing::PricingRuleInput;
+    use chrono::NaiveDate;
     use sqlx::{query, Row};
 
     #[tokio::test]
@@ -2642,6 +2764,76 @@ mod tests {
                 .as_deref(),
             Some("2026-06-01T11:00:00+08:00")
         );
+    }
+
+    #[tokio::test]
+    async fn token_pulse_snapshot_compares_today_to_historical_average() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+
+        insert_minimal_call_with_date(
+            &repository,
+            "today-morning",
+            "codex",
+            "2026-06-04T09:30:00+08:00",
+            "2026-06-04",
+            60,
+            0.0,
+        )
+        .await;
+        insert_minimal_call_with_date(
+            &repository,
+            "today-night",
+            "codex",
+            "2026-06-04T21:15:00+08:00",
+            "2026-06-04",
+            100,
+            0.0,
+        )
+        .await;
+        insert_minimal_call_with_date(
+            &repository,
+            "yesterday",
+            "codex",
+            "2026-06-03T11:00:00+08:00",
+            "2026-06-03",
+            100,
+            0.0,
+        )
+        .await;
+        insert_minimal_call_with_date(
+            &repository,
+            "two-days-ago",
+            "codex",
+            "2026-06-02T11:00:00+08:00",
+            "2026-06-02",
+            200,
+            0.0,
+        )
+        .await;
+
+        let snapshot = repository
+            .token_pulse_snapshot_for_date(
+                NaiveDate::from_ymd_opt(2026, 6, 4).expect("valid test date"),
+                2,
+            )
+            .await
+            .expect("token pulse snapshot reads");
+
+        assert_eq!(snapshot.today_local, "2026-06-04");
+        assert_eq!(snapshot.today_tokens, 160);
+        assert_eq!(snapshot.today_calls, 2);
+        assert_eq!(snapshot.yesterday_tokens, 100);
+        assert_eq!(snapshot.average_daily_tokens, 150.0);
+        assert_eq!(snapshot.remaining_to_average, 0);
+        assert_eq!(snapshot.ratio_to_average, Some(160.0 / 150.0));
+        assert_eq!(snapshot.hourly_tokens.len(), 2);
+        assert_eq!(snapshot.hourly_tokens[0].hour, 9);
+        assert_eq!(snapshot.hourly_tokens[0].total_tokens, 60);
+        assert_eq!(snapshot.hourly_tokens[1].hour, 21);
+        assert_eq!(snapshot.hourly_tokens[1].total_tokens, 100);
     }
 
     #[tokio::test]
@@ -3546,6 +3738,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn token_pulse_window_position_round_trips_through_app_settings() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+
+        assert!(repository
+            .token_pulse_window_position()
+            .await
+            .expect("token pulse position reads")
+            .is_none());
+
+        repository
+            .save_token_pulse_window_position(TokenPulseWindowPosition {
+                x: 128.5,
+                y: 720.25,
+            })
+            .await
+            .expect("token pulse position saves");
+
+        let position = repository
+            .token_pulse_window_position()
+            .await
+            .expect("token pulse position reloads")
+            .expect("token pulse position exists");
+
+        assert_eq!(position.x, 128.5);
+        assert_eq!(position.y, 720.25);
+    }
+
+    #[tokio::test]
     async fn recalculate_estimated_costs_applies_local_pricing_rules() {
         let repository = TokenScopeRepository::connect_in_memory()
             .await
@@ -3968,6 +4191,27 @@ mod tests {
         total_tokens: i64,
         estimated_cost_usd: f64,
     ) {
+        insert_minimal_call_with_date(
+            repository,
+            id,
+            provider,
+            started_at,
+            "2026-05-30",
+            total_tokens,
+            estimated_cost_usd,
+        )
+        .await;
+    }
+
+    async fn insert_minimal_call_with_date(
+        repository: &TokenScopeRepository,
+        id: &str,
+        provider: &str,
+        started_at: &str,
+        date_local: &str,
+        total_tokens: i64,
+        estimated_cost_usd: f64,
+    ) {
         query(
             r#"
       INSERT INTO llm_call (
@@ -3980,11 +4224,12 @@ mod tests {
         estimated_cost_usd,
         status,
         created_at
-      ) VALUES (?1, ?2, '2026-05-30', ?3, ?4, ?4, ?5, 'success', ?2)
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 'success', ?2)
       "#,
         )
         .bind(id)
         .bind(started_at)
+        .bind(date_local)
         .bind(provider)
         .bind(total_tokens)
         .bind(estimated_cost_usd)

@@ -22,6 +22,7 @@ import type {
   AppUpdateInfo,
   AppUpdateProgress,
   AppUpdateStatus,
+  TokenPulseSnapshot,
   TopDimensionRow,
   CustomImporterPreview,
   CustomImporterProfile,
@@ -128,6 +129,27 @@ const emptyDataHealthSummary: DataHealthSummary = {
   issue_calls: 0,
   issues: [],
 };
+
+function localDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function emptyTokenPulse(historyDays: number): TokenPulseSnapshot {
+  return {
+    today_local: localDateString(),
+    today_tokens: 0,
+    today_calls: 0,
+    yesterday_tokens: 0,
+    average_daily_tokens: 0,
+    history_days: historyDays,
+    ratio_to_average: null,
+    remaining_to_average: 0,
+    hourly_tokens: [],
+  };
+}
 
 function defaultSyncSettings(): SyncSettings {
   return {
@@ -361,6 +383,30 @@ export function getDailyUsageSeries(
     "get_daily_usage_series",
     { from, to, groupBy },
     [],
+  );
+}
+
+export function getTokenPulse(historyDays = 30) {
+  return invokeOrFallback<TokenPulseSnapshot>(
+    "get_token_pulse",
+    { historyDays },
+    emptyTokenPulse(historyDays),
+  );
+}
+
+export function setTokenPulseDetailHovered(source: "mini" | "detail", hovered: boolean) {
+  return invokeOrFallback<void>(
+    "set_token_pulse_detail_hovered",
+    { source, hovered },
+    undefined,
+  );
+}
+
+export function setTokenPulseDragging(dragging: boolean) {
+  return invokeOrFallback<void>(
+    "set_token_pulse_dragging",
+    { dragging },
+    undefined,
   );
 }
 
