@@ -101,6 +101,15 @@ pub async fn run_once(
     repository: &TokenScopeRepository,
     force_bootstrap: bool,
 ) -> Result<GitHubSyncRunResult, String> {
+    let result = run_once_inner(repository, force_bootstrap).await;
+    record_error_result(repository, &result).await;
+    result
+}
+
+async fn run_once_inner(
+    repository: &TokenScopeRepository,
+    force_bootstrap: bool,
+) -> Result<GitHubSyncRunResult, String> {
     let settings = repository
         .get_github_sync_settings()
         .await
@@ -142,7 +151,9 @@ pub async fn run_github_sync_once_with_transport<T: GitHubSyncTransport>(
         .get_github_sync_settings()
         .await
         .map_err(|err| err.to_string())?;
-    run_with_settings(repository, transport, mode, settings).await
+    let result = run_with_settings(repository, transport, mode, settings).await;
+    record_error_result(repository, &result).await;
+    result
 }
 
 async fn run_with_settings<T: GitHubSyncTransport>(
@@ -449,6 +460,17 @@ fn package_bytes(package: &GitHubSyncPackage) -> Result<Vec<u8>, String> {
     serde_json::to_vec(package).map_err(|err| format!("GitHub 同步分片序列化失败：{err}"))
 }
 
+async fn record_error_result(
+    repository: &TokenScopeRepository,
+    result: &Result<GitHubSyncRunResult, String>,
+) {
+    if let Err(err) = result {
+        let _ = repository
+            .record_github_sync_run("error", err, None, None)
+            .await;
+    }
+}
+
 #[derive(Debug, Default)]
 struct GitHubSyncDownloadSummary {
     downloaded_shards: i64,
@@ -726,6 +748,37 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn sync_records_remote_download_errors_for_status_ui() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
+        let transport = FakeGitHubTransport::default();
+        transport.seed_file(&layout.bootstrap_path("remote-a"), Vec::new());
+
+        let err = run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+            .await
+            .expect_err("corrupt remote shard fails");
+
+        assert!(err.contains("GitHub 同步分片加密信封解析失败"));
+        assert_eq!(
+            app_setting_value(&repository, "github_sync_last_status").await,
+            Some("error".to_string())
+        );
+        assert_eq!(
+            app_setting_value(&repository, "github_sync_last_message").await,
+            Some(err)
+        );
+    }
+
     #[test]
     fn day_file_dates_only_accept_iso_date_shards() {
         assert_eq!(
@@ -900,5 +953,14 @@ mod tests {
         .await
         .expect("sum reads")
         .get("total")
+    }
+
+    async fn app_setting_value(repository: &TokenScopeRepository, key: &str) -> Option<String> {
+        query("SELECT value FROM app_setting WHERE key = ?1")
+            .bind(key)
+            .fetch_optional(repository.pool())
+            .await
+            .expect("setting reads")
+            .map(|row| row.get("value"))
     }
 }

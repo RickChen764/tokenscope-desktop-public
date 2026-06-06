@@ -115,7 +115,7 @@ impl GitHubContentsClient {
             .http
             .get(self.contents_url(path))
             .query(&[("ref", self.branch.as_str())])
-            .headers(self.headers())
+            .headers(self.json_headers())
             .send()
             .await
             .map_err(|err| format!("GitHub 文件读取失败：{err}"))?;
@@ -130,7 +130,11 @@ impl GitHubContentsClient {
             .json::<GitHubGetFileResponse>()
             .await
             .map_err(|err| format!("GitHub 文件响应解析失败：{err}"))?;
-        Ok(Some(body.into_content_file()?))
+        let content = match body.content_bytes()? {
+            Some(content) => content,
+            None => self.get_raw_file(&body.path).await?,
+        };
+        Ok(Some(body.into_content_file(content)))
     }
 
     pub async fn put_file(
@@ -145,7 +149,7 @@ impl GitHubContentsClient {
         let response = self
             .http
             .put(self.contents_url(path))
-            .headers(self.headers())
+            .headers(self.json_headers())
             .json(&request)
             .send()
             .await
@@ -171,7 +175,7 @@ impl GitHubContentsClient {
             .http
             .get(self.contents_url(&layout.devices_path()))
             .query(&[("ref", self.branch.as_str())])
-            .headers(self.headers())
+            .headers(self.json_headers())
             .send()
             .await
             .map_err(|err| format!("GitHub 设备目录读取失败：{err}"))?;
@@ -202,7 +206,7 @@ impl GitHubContentsClient {
             .http
             .get(self.contents_url(&layout.days_path(device_id)))
             .query(&[("ref", self.branch.as_str())])
-            .headers(self.headers())
+            .headers(self.json_headers())
             .send()
             .await
             .map_err(|err| format!("GitHub 日期分片目录读取失败：{err}"))?;
@@ -240,12 +244,37 @@ impl GitHubContentsClient {
         )
     }
 
-    fn headers(&self) -> header::HeaderMap {
+    async fn get_raw_file(&self, path: &str) -> Result<Vec<u8>, String> {
+        let response = self
+            .http
+            .get(self.contents_url(path))
+            .query(&[("ref", self.branch.as_str())])
+            .headers(self.raw_headers())
+            .send()
+            .await
+            .map_err(|err| format!("GitHub raw 文件读取失败：{err}"))?;
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| format!("GitHub raw 文件响应读取失败：{err}"))
+    }
+
+    fn json_headers(&self) -> header::HeaderMap {
+        self.headers_with_accept("application/vnd.github+json")
+    }
+
+    fn raw_headers(&self) -> header::HeaderMap {
+        self.headers_with_accept("application/vnd.github.raw+json")
+    }
+
+    fn headers_with_accept(&self, accept: &'static str) -> header::HeaderMap {
         let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::ACCEPT,
-            header::HeaderValue::from_static("application/vnd.github+json"),
-        );
+        headers.insert(header::ACCEPT, header::HeaderValue::from_static(accept));
         headers.insert(
             header::USER_AGENT,
             header::HeaderValue::from_static("TokenScope Desktop"),
@@ -272,20 +301,26 @@ struct GitHubGetFileResponse {
 }
 
 impl GitHubGetFileResponse {
-    fn into_content_file(self) -> Result<GitHubContentFile, String> {
-        let content = match (self.content, self.encoding.as_deref()) {
+    fn content_bytes(&self) -> Result<Option<Vec<u8>>, String> {
+        match (self.content.as_deref(), self.encoding.as_deref()) {
             (Some(content), Some("base64")) => STANDARD
                 .decode(content.replace('\n', ""))
-                .map_err(|err| format!("GitHub 文件 base64 解码失败：{err}"))?,
-            _ => Vec::new(),
-        };
+                .map(Some)
+                .map_err(|err| format!("GitHub 文件 base64 解码失败：{err}")),
+            (Some(content), Some("none")) if content.trim().is_empty() => Ok(None),
+            (None, _) => Ok(None),
+            (_, Some(encoding)) => Err(format!("不支持的 GitHub 文件编码：{encoding}")),
+            _ => Ok(None),
+        }
+    }
 
-        Ok(GitHubContentFile {
+    fn into_content_file(self, content: Vec<u8>) -> GitHubContentFile {
+        GitHubContentFile {
             name: self.name,
             path: self.path,
             sha: self.sha,
             content,
-        })
+        }
     }
 }
 
@@ -386,5 +421,34 @@ mod tests {
 
         let request = request.with_branch("main");
         assert_eq!(request.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn github_content_response_marks_large_object_content_for_raw_download() {
+        let response = GitHubGetFileResponse {
+            name: "bootstrap.tokenscope.zst.enc".to_string(),
+            path: "tokenscope-sync/v1/devices/device-a/bootstrap.tokenscope.zst.enc".to_string(),
+            sha: "file-sha".to_string(),
+            content: Some("".to_string()),
+            encoding: Some("none".to_string()),
+        };
+
+        assert!(response.content_bytes().expect("content parses").is_none());
+    }
+
+    #[test]
+    fn github_content_response_decodes_base64_content() {
+        let response = GitHubGetFileResponse {
+            name: "manifest.enc".to_string(),
+            path: "tokenscope-sync/v1/devices/device-a/manifest.enc".to_string(),
+            sha: "file-sha".to_string(),
+            content: Some("aGVsbG8=".to_string()),
+            encoding: Some("base64".to_string()),
+        };
+
+        assert_eq!(
+            response.content_bytes().expect("content parses"),
+            Some(b"hello".to_vec())
+        );
     }
 }
