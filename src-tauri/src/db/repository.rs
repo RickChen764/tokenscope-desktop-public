@@ -2,6 +2,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Local, NaiveDate};
 use serde_json::Value;
+use sha2::{Digest, Sha384};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{query, query_as, QueryBuilder, Row, Sqlite, SqlitePool};
 use uuid::Uuid;
@@ -34,6 +35,27 @@ const TOP_SESSIONS_SQL: &str = include_str!("../../sql/top_sessions.sql");
 const RECENT_CALLS_SQL: &str = include_str!("../../sql/recent_calls.sql");
 const AGENT_SOURCE_STATS_SQL: &str = include_str!("../../sql/agent_source_stats.sql");
 const SEED_DEMO_SQL: &str = include_str!("../../sql/seed_demo.sql");
+const MIGRATION_BYTES: &[(i64, &[u8])] = &[
+    (
+        1,
+        include_bytes!("../../migrations/0001_initial_schema.sql"),
+    ),
+    (
+        2,
+        include_bytes!("../../migrations/0002_agent_import_map.sql"),
+    ),
+    (3, include_bytes!("../../migrations/0003_app_setting.sql")),
+    (
+        4,
+        include_bytes!("../../migrations/0004_custom_importer_profiles.sql"),
+    ),
+    (
+        5,
+        include_bytes!("../../migrations/0005_external_datasets.sql"),
+    ),
+    (6, include_bytes!("../../migrations/0006_cost_currency.sql")),
+    (7, include_bytes!("../../migrations/0007_github_sync.sql")),
+];
 
 #[derive(Clone)]
 pub struct TokenScopeRepository {
@@ -72,6 +94,7 @@ impl TokenScopeRepository {
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        normalize_line_ending_migration_checksums(&self.pool).await?;
         sqlx::migrate!("./migrations").run(&self.pool).await
     }
 
@@ -3092,6 +3115,92 @@ fn redact_secret(secret: &str) -> String {
     format!("{prefix}...{suffix}")
 }
 
+async fn normalize_line_ending_migration_checksums(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::migrate::MigrateError> {
+    let migration_table_count: i64 = query(
+        r#"
+      SELECT COUNT(*) AS count
+      FROM sqlite_master
+      WHERE type = 'table' AND name = '_sqlx_migrations'
+      "#,
+    )
+    .fetch_one(pool)
+    .await?
+    .try_get("count")?;
+    if migration_table_count == 0 {
+        return Ok(());
+    }
+
+    for (version, bytes) in MIGRATION_BYTES {
+        let current_checksum = migration_checksum(bytes);
+        let Some(alternate_checksum) = alternate_line_ending_checksum(bytes) else {
+            continue;
+        };
+        if alternate_checksum == current_checksum {
+            continue;
+        }
+
+        query(
+            r#"
+      UPDATE _sqlx_migrations
+      SET checksum = ?1
+      WHERE version = ?2 AND checksum = ?3
+      "#,
+        )
+        .bind(&current_checksum)
+        .bind(version)
+        .bind(&alternate_checksum)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+fn alternate_line_ending_checksum(bytes: &[u8]) -> Option<Vec<u8>> {
+    let alternate = if bytes.windows(2).any(|window| window == b"\r\n") {
+        normalize_crlf_to_lf(bytes)
+    } else if bytes.contains(&b'\n') {
+        normalize_lf_to_crlf(bytes)
+    } else {
+        return None;
+    };
+
+    Some(migration_checksum(&alternate))
+}
+
+fn migration_checksum(bytes: &[u8]) -> Vec<u8> {
+    Sha384::digest(bytes).to_vec()
+}
+
+fn normalize_crlf_to_lf(bytes: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            normalized.push(b'\n');
+            index += 2;
+        } else {
+            normalized.push(bytes[index]);
+            index += 1;
+        }
+    }
+    normalized
+}
+
+fn normalize_lf_to_crlf(bytes: &[u8]) -> Vec<u8> {
+    let mut normalized =
+        Vec::with_capacity(bytes.len() + bytes.iter().filter(|&&b| b == b'\n').count());
+    for &byte in bytes {
+        if byte == b'\n' {
+            normalized.push(b'\r');
+        }
+        normalized.push(byte);
+    }
+    normalized
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3118,6 +3227,65 @@ mod tests {
         assert_eq!(summary.estimated_cost_usd, 0.0);
         assert_eq!(summary.error_rate, 0.0);
         assert_eq!(summary.avg_latency_ms, None);
+    }
+
+    #[tokio::test]
+    async fn migration_accepts_existing_crlf_checksum_for_same_sql() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        let initial_schema_lf = include_str!("../../migrations/0001_initial_schema.sql");
+        let initial_schema_crlf = initial_schema_lf.replace('\n', "\r\n");
+
+        sqlx::raw_sql(&initial_schema_crlf)
+            .execute(repository.pool())
+            .await
+            .expect("legacy initial schema runs");
+        query(
+            r#"
+      CREATE TABLE _sqlx_migrations (
+        version BIGINT PRIMARY KEY,
+        description TEXT NOT NULL,
+        installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        success BOOLEAN NOT NULL,
+        checksum BLOB NOT NULL,
+        execution_time BIGINT NOT NULL
+      )
+      "#,
+        )
+        .execute(repository.pool())
+        .await
+        .expect("migration table created");
+        query(
+            r#"
+      INSERT INTO _sqlx_migrations (
+        version,
+        description,
+        success,
+        checksum,
+        execution_time
+      ) VALUES (1, 'initial schema', 1, ?1, 0)
+      "#,
+        )
+        .bind(test_migration_checksum(initial_schema_crlf.as_bytes()))
+        .execute(repository.pool())
+        .await
+        .expect("legacy checksum recorded");
+
+        repository
+            .migrate()
+            .await
+            .expect("migration accepts line-ending-only checksum drift");
+
+        let checksum: Vec<u8> = query("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+            .fetch_one(repository.pool())
+            .await
+            .expect("migration row exists")
+            .get("checksum");
+        assert_eq!(
+            checksum,
+            test_migration_checksum(initial_schema_lf.as_bytes())
+        );
     }
 
     #[tokio::test]
@@ -5123,5 +5291,9 @@ mod tests {
         .execute(repository.pool())
         .await
         .expect("dimension call inserted");
+    }
+
+    fn test_migration_checksum(bytes: &[u8]) -> Vec<u8> {
+        super::migration_checksum(bytes)
     }
 }

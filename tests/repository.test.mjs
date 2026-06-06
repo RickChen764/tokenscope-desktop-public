@@ -10,6 +10,10 @@ function readProjectFile(path) {
   return readFileSync(join(root, path), "utf8");
 }
 
+function readProjectBytes(path) {
+  return readFileSync(join(root, path));
+}
+
 function openSeededDatabase() {
   const db = new DatabaseSync(":memory:");
   runAllMigrations(db);
@@ -131,6 +135,19 @@ test("github sync migration stores remote shard state", () => {
   assert.ok(migration.includes("shard_date TEXT"));
   assert.ok(migration.includes("content_hash TEXT NOT NULL"));
   assert.ok(migration.includes("UNIQUE(device_id, shard_kind, shard_date)"));
+});
+
+test("migration files keep stable LF bytes for SQLx checksums", () => {
+  const attributes = readProjectFile(".gitattributes");
+  const migrations = readdirSync(join(root, "src-tauri/migrations"))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+
+  assert.ok(attributes.includes("src-tauri/migrations/*.sql text eol=lf"));
+  for (const migration of migrations) {
+    const bytes = readProjectBytes(join("src-tauri/migrations", migration));
+    assert.equal(bytes.includes(0x0d), false, migration);
+  }
 });
 
 test("top dimension queries rank providers, agents, models, workflows, projects, and sessions", () => {
