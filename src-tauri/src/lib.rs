@@ -96,6 +96,7 @@ pub fn run() {
             commands::settings::open_export_folder,
             commands::settings::remove_external_dataset,
             commands::settings::get_github_sync_settings,
+            commands::settings::list_github_sync_remote_devices,
             commands::settings::save_github_sync_settings,
             commands::settings::test_github_sync_connection,
             commands::settings::run_github_sync_once,

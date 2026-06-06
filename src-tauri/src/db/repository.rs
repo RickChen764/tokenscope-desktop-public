@@ -16,11 +16,11 @@ use super::models::{
     AgentSourceStats, AppSettings, AppSettingsInput, CallFilterOptions, CustomImporterProfile,
     CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint, DashboardSummary,
     DataHealthIssueRow, DataHealthIssueSummary, DataHealthSummary, ExternalDataset,
-    ExternalDatasetImportCall, ExternalDatasetInput, GitHubSyncSettings, GitHubSyncSettingsInput,
-    GitHubSyncShardState, GitHubSyncShardStateInput, LlmCallFilters, LlmCallPage, LlmCallRow,
-    NewLlmCall, ProviderConfig, ProviderConfigInput, SyncSettings, SyncSettingsInput,
-    TokenPulseHourlyPoint, TokenPulseSnapshot, TokenPulseWindowPosition, TopDimensionRow,
-    UnknownPricingModel,
+    ExternalDatasetImportCall, ExternalDatasetInput, GitHubSyncRemoteDevice, GitHubSyncSettings,
+    GitHubSyncSettingsInput, GitHubSyncShardState, GitHubSyncShardStateInput, LlmCallFilters,
+    LlmCallPage, LlmCallRow, NewLlmCall, ProviderConfig, ProviderConfigInput, SyncSettings,
+    SyncSettingsInput, TokenPulseHourlyPoint, TokenPulseSnapshot, TokenPulseWindowPosition,
+    TopDimensionRow, UnknownPricingModel,
 };
 
 const DASHBOARD_SUMMARY_SQL: &str = include_str!("../../sql/dashboard_summary.sql");
@@ -1544,6 +1544,7 @@ impl TokenScopeRepository {
             bootstrap_uploaded,
             last_upload_at: self.app_setting_value("github_sync_last_upload_at").await?,
             last_import_at: self.app_setting_value("github_sync_last_import_at").await?,
+            last_message: last_message.clone(),
             last_error: if last_status.as_deref() == Some("error") {
                 last_message.clone()
             } else {
@@ -1551,6 +1552,38 @@ impl TokenScopeRepository {
             },
             last_status,
         })
+    }
+
+    pub async fn list_github_sync_remote_devices(
+        &self,
+    ) -> Result<Vec<GitHubSyncRemoteDevice>, sqlx::Error> {
+        query_as::<_, GitHubSyncRemoteDevice>(
+            r#"
+      WITH shard_summary AS (
+        SELECT
+          device_id,
+          SUM(CASE WHEN shard_kind = 'bootstrap' THEN 1 ELSE 0 END) AS bootstrap_shards,
+          SUM(CASE WHEN shard_kind = 'day' THEN 1 ELSE 0 END) AS day_shards,
+          MAX(imported_at) AS last_import_at
+        FROM github_sync_shard
+        WHERE imported_at IS NOT NULL
+        GROUP BY device_id
+      )
+      SELECT
+        s.device_id,
+        d.device_name,
+        s.bootstrap_shards,
+        s.day_shards,
+        s.last_import_at,
+        COALESCE(d.calls, 0) AS calls,
+        COALESCE(d.total_tokens, 0) AS total_tokens
+      FROM shard_summary s
+      LEFT JOIN external_dataset d ON d.device_id = s.device_id
+      ORDER BY s.last_import_at DESC, s.device_id ASC
+      "#,
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     pub async fn save_github_sync_settings(
@@ -3062,8 +3095,8 @@ fn redact_secret(secret: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettingsInput, LlmCallFilters, ProviderConfigInput, TokenPulseWindowPosition,
-        TokenScopeRepository,
+        AppSettingsInput, ExternalDatasetInput, GitHubSyncShardStateInput, LlmCallFilters,
+        ProviderConfigInput, TokenPulseWindowPosition, TokenScopeRepository,
     };
     use crate::pricing::PricingRuleInput;
     use chrono::NaiveDate;
@@ -4157,6 +4190,88 @@ mod tests {
             .expect("shard exists");
 
         assert_eq!(state.content_hash, "abc123");
+    }
+
+    #[tokio::test]
+    async fn github_sync_remote_devices_summarize_imported_shards_and_dataset_totals() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+        repository
+            .record_github_sync_shard(&GitHubSyncShardStateInput {
+                device_id: "local-device".to_string(),
+                shard_kind: "day".to_string(),
+                shard_date: Some("2026-06-05".to_string()),
+                content_hash: "local-hash".to_string(),
+                github_path:
+                    "tokenscope-sync/v1/devices/local-device/days/2026-06-05.tokenscope.zst.enc"
+                        .to_string(),
+                imported_at: None,
+            })
+            .await
+            .expect("local shard records");
+        repository
+            .record_github_sync_shard(&GitHubSyncShardStateInput {
+                device_id: "remote-a".to_string(),
+                shard_kind: "bootstrap".to_string(),
+                shard_date: None,
+                content_hash: "remote-bootstrap".to_string(),
+                github_path: "tokenscope-sync/v1/devices/remote-a/bootstrap.tokenscope.zst.enc"
+                    .to_string(),
+                imported_at: Some("2026-06-05T09:00:00+08:00".to_string()),
+            })
+            .await
+            .expect("remote bootstrap records");
+        for date in ["2026-06-05", "2026-06-06"] {
+            repository
+                .record_github_sync_shard(&GitHubSyncShardStateInput {
+                    device_id: "remote-a".to_string(),
+                    shard_kind: "day".to_string(),
+                    shard_date: Some(date.to_string()),
+                    content_hash: format!("remote-day-{date}"),
+                    github_path: format!(
+                        "tokenscope-sync/v1/devices/remote-a/days/{date}.tokenscope.zst.enc"
+                    ),
+                    imported_at: Some(format!("{date}T10:00:00+08:00")),
+                })
+                .await
+                .expect("remote day records");
+        }
+        repository
+            .upsert_external_dataset(&ExternalDatasetInput {
+                id: "device-remote-a".to_string(),
+                device_id: "remote-a".to_string(),
+                device_name: "Remote A".to_string(),
+                package_version: 1,
+                source_path: Some("github-sync:day".to_string()),
+                imported_at: "2026-06-06T10:00:00+08:00".to_string(),
+                updated_at: "2026-06-06T10:00:00+08:00".to_string(),
+                calls: 12,
+                total_tokens: 3456,
+                estimated_cost_usd: 0.0,
+                cost_currency: "USD".to_string(),
+            })
+            .await
+            .expect("external dataset records");
+
+        let devices = repository
+            .list_github_sync_remote_devices()
+            .await
+            .expect("remote devices load");
+
+        assert_eq!(devices.len(), 1);
+        let device = &devices[0];
+        assert_eq!(device.device_id, "remote-a");
+        assert_eq!(device.device_name.as_deref(), Some("Remote A"));
+        assert_eq!(device.bootstrap_shards, 1);
+        assert_eq!(device.day_shards, 2);
+        assert_eq!(
+            device.last_import_at.as_deref(),
+            Some("2026-06-06T10:00:00+08:00")
+        );
+        assert_eq!(device.calls, 12);
+        assert_eq!(device.total_tokens, 3456);
     }
 
     #[tokio::test]

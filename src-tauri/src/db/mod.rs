@@ -6,9 +6,9 @@ pub use models::{
     CustomImporterProfile, CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint,
     DashboardSummary, DataHealthIssueRow, DataHealthSummary, DevicePackageImportResult,
     ExternalDataset, ExternalDatasetImportCall, ExternalDatasetInput,
-    GitHubSyncConnectionTestResult, GitHubSyncRunResult, GitHubSyncSettings,
-    GitHubSyncSettingsInput, GitHubSyncShardStateInput, LlmCallFilters, LlmCallPage, LlmCallRow,
-    NewLlmCall, SyncRunResult, SyncSettings, SyncSettingsInput, TokenPulseSnapshot,
-    TokenPulseWindowPosition, TopDimensionRow,
+    GitHubSyncConnectionTestResult, GitHubSyncRemoteDevice, GitHubSyncRunResult,
+    GitHubSyncSettings, GitHubSyncSettingsInput, GitHubSyncShardStateInput, LlmCallFilters,
+    LlmCallPage, LlmCallRow, NewLlmCall, SyncRunResult, SyncSettings, SyncSettingsInput,
+    TokenPulseSnapshot, TokenPulseWindowPosition, TopDimensionRow,
 };
 pub use repository::TokenScopeRepository;

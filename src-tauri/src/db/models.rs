@@ -293,7 +293,19 @@ pub struct GitHubSyncSettings {
     pub last_upload_at: Option<String>,
     pub last_import_at: Option<String>,
     pub last_status: Option<String>,
+    pub last_message: Option<String>,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct GitHubSyncRemoteDevice {
+    pub device_id: String,
+    pub device_name: Option<String>,
+    pub bootstrap_shards: i64,
+    pub day_shards: i64,
+    pub last_import_at: Option<String>,
+    pub calls: i64,
+    pub total_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

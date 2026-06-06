@@ -31,6 +31,7 @@ import type {
   DevicePackageImportResult,
   ExternalDataset,
   GitHubSyncConnectionTestResult,
+  GitHubSyncRemoteDevice,
   GitHubSyncRunResult,
   GitHubSyncSettings,
   GitHubSyncSettingsInput,
@@ -191,6 +192,7 @@ function defaultGitHubSyncSettings(): GitHubSyncSettings {
     last_upload_at: null,
     last_import_at: null,
     last_status: null,
+    last_message: null,
     last_error: null,
   };
 }
@@ -623,6 +625,14 @@ export function getGitHubSyncSettings() {
     "get_github_sync_settings",
     {},
     defaultGitHubSyncSettings(),
+  );
+}
+
+export function listGitHubSyncRemoteDevices() {
+  return invokeOrFallback<GitHubSyncRemoteDevice[]>(
+    "list_github_sync_remote_devices",
+    {},
+    [],
   );
 }
 

@@ -5,7 +5,8 @@ use tauri::State;
 
 use crate::db::{
     DevicePackageImportResult, ExternalDataset, GitHubSyncConnectionTestResult,
-    GitHubSyncRunResult, GitHubSyncSettings, GitHubSyncSettingsInput, LlmCallFilters,
+    GitHubSyncRemoteDevice, GitHubSyncRunResult, GitHubSyncSettings, GitHubSyncSettingsInput,
+    LlmCallFilters,
 };
 use crate::device_packages;
 use crate::github_sync;
@@ -112,6 +113,17 @@ pub async fn get_github_sync_settings(
     state
         .repository
         .get_github_sync_settings()
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn list_github_sync_remote_devices(
+    state: State<'_, AppState>,
+) -> Result<Vec<GitHubSyncRemoteDevice>, String> {
+    state
+        .repository
+        .list_github_sync_remote_devices()
         .await
         .map_err(|err| err.to_string())
 }

@@ -189,7 +189,8 @@ async fn run_with_settings<T: GitHubSyncTransport>(
         mode == SyncRunMode::ForceBootstrap || !settings.bootstrap_uploaded;
     if should_upload_bootstrap {
         let path = layout.bootstrap_path(&device_id);
-        let hash = upload_package(
+        let hash = package_content_hash(&bootstrap_package)?;
+        upload_package(
             transport,
             &path,
             &bootstrap_package,
@@ -219,7 +220,7 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                 export_github_sync_package(repository, GitHubSyncShardSelector::Day(date.clone()))
                     .await?;
             let plaintext = package_bytes(&package)?;
-            let hash = content_hash_hex(&plaintext);
+            let hash = package_content_hash(&package)?;
             let existing = repository
                 .github_sync_shard(&device_id, "day", Some(&date))
                 .await
@@ -255,7 +256,9 @@ async fn run_with_settings<T: GitHubSyncTransport>(
         }
     }
 
-    upload_manifest(transport, &layout, &device_id, &sync_password).await?;
+    if uploaded_shards > 0 {
+        upload_manifest(transport, &layout, &device_id, &sync_password).await?;
+    }
     let download_summary =
         download_remote_updates(repository, transport, &layout, &device_id, &sync_password).await?;
     let finished_at = Local::now().to_rfc3339();
@@ -267,7 +270,11 @@ async fn run_with_settings<T: GitHubSyncTransport>(
         .record_github_sync_run(
             "success",
             &message,
-            Some(&finished_at),
+            if uploaded_shards > 0 {
+                Some(&finished_at)
+            } else {
+                None
+            },
             if download_summary.downloaded_shards > 0 {
                 Some(&finished_at)
             } else {
@@ -458,6 +465,12 @@ async fn upload_plaintext<T: GitHubSyncTransport>(
 
 fn package_bytes(package: &GitHubSyncPackage) -> Result<Vec<u8>, String> {
     serde_json::to_vec(package).map_err(|err| format!("GitHub 同步分片序列化失败：{err}"))
+}
+
+fn package_content_hash(package: &GitHubSyncPackage) -> Result<String, String> {
+    let mut stable_package = package.clone();
+    stable_package.exported_at.clear();
+    package_bytes(&stable_package).map(|bytes| content_hash_hex(&bytes))
 }
 
 async fn record_error_result(
@@ -684,6 +697,49 @@ mod tests {
         assert!(transport
             .uploaded_path("days/2026-06-05.tokenscope.zst.enc")
             .contains("2026-06-05"));
+    }
+
+    #[tokio::test]
+    async fn sync_skips_all_uploads_when_local_shards_are_unchanged() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        insert_test_call(&repository, "local-a", "2026-06-05", 100).await;
+
+        let transport = FakeGitHubTransport::default();
+        run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+            .await
+            .expect("first sync succeeds");
+        let first_upload_at = app_setting_value(&repository, "github_sync_last_upload_at").await;
+        let uploaded_before_second_sync = transport
+            .uploaded
+            .lock()
+            .expect("fake transport lock")
+            .len();
+
+        let result =
+            run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+                .await
+                .expect("second sync succeeds");
+        let uploaded_after_second_sync = transport
+            .uploaded
+            .lock()
+            .expect("fake transport lock")
+            .len();
+
+        assert_eq!(result.uploaded_shards, 0);
+        assert_eq!(uploaded_after_second_sync, uploaded_before_second_sync);
+        assert_eq!(
+            app_setting_value(&repository, "github_sync_last_upload_at").await,
+            first_upload_at
+        );
     }
 
     #[tokio::test]

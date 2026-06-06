@@ -84,7 +84,18 @@ export interface GitHubSyncSettings
   last_upload_at: string | null;
   last_import_at: string | null;
   last_status: string | null;
+  last_message: string | null;
   last_error: string | null;
+}
+
+export interface GitHubSyncRemoteDevice {
+  device_id: string;
+  device_name: string | null;
+  bootstrap_shards: number;
+  day_shards: number;
+  last_import_at: string | null;
+  calls: number;
+  total_tokens: number;
 }
 
 export interface GitHubSyncConnectionTestResult {

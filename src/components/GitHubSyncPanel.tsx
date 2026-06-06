@@ -1,14 +1,19 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import {
   forceGitHubSyncBootstrapUpload,
   getGitHubSyncSettings,
+  listGitHubSyncRemoteDevices,
   runGitHubSyncOnce,
   saveGitHubSyncSettings,
   testGitHubSyncConnection,
 } from "../services/dashboard";
-import type { GitHubSyncSettings, GitHubSyncSettingsInput } from "../types/dashboard";
-import { formatDateTime } from "../utils/format";
+import type {
+  GitHubSyncRemoteDevice,
+  GitHubSyncSettings,
+  GitHubSyncSettingsInput,
+} from "../types/dashboard";
+import { formatDateTime, formatInteger } from "../utils/format";
 import type { ToastNoticeValue } from "./ToastNotice";
 
 const defaultDraft: GitHubSyncSettingsInput = {
@@ -20,6 +25,12 @@ const defaultDraft: GitHubSyncSettingsInput = {
   token: "",
   sync_password: "",
 };
+const GITHUB_SYNC_STATUS_REFRESH_MS = 30_000;
+
+interface GitHubSyncRefreshOptions {
+  resetDraft?: boolean;
+  showError?: boolean;
+}
 
 interface GitHubSyncPanelProps {
   onNotice: (notice: ToastNoticeValue) => void;
@@ -38,24 +49,96 @@ function draftFromSettings(settings: GitHubSyncSettings): GitHubSyncSettingsInpu
 }
 
 export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const numberLocale = language === "zh-CN" ? "zh-CN" : "en-US";
   const [settings, setSettings] = useState<GitHubSyncSettings | null>(null);
+  const [remoteDevices, setRemoteDevices] = useState<GitHubSyncRemoteDevice[]>([]);
   const [draft, setDraft] = useState<GitHubSyncSettingsInput>(defaultDraft);
   const [isBusy, setIsBusy] = useState(false);
+  const [isRemoteDevicesLoading, setIsRemoteDevicesLoading] = useState(true);
+
+  const applyGitHubSyncSettings = useCallback(
+    (nextSettings: GitHubSyncSettings, options: GitHubSyncRefreshOptions = {}) => {
+      setSettings(nextSettings);
+      if (options.resetDraft) {
+        setDraft(draftFromSettings(nextSettings));
+      }
+    },
+    [],
+  );
+
+  const refreshGitHubSyncSettings = useCallback(
+    async (options: GitHubSyncRefreshOptions = {}) => {
+      try {
+        const nextSettings = await getGitHubSyncSettings();
+        applyGitHubSyncSettings(nextSettings, options);
+        return nextSettings;
+      } catch (err) {
+        if (options.showError) {
+          onNotice({
+            kind: "error",
+            message: t("读取 GitHub 同步状态失败：{error}", {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          });
+        }
+        return null;
+      }
+    },
+    [applyGitHubSyncSettings, onNotice, t],
+  );
+
+  const refreshGitHubSyncRemoteDevices = useCallback(
+    async (options: { showError?: boolean } = {}) => {
+      try {
+        const nextDevices = await listGitHubSyncRemoteDevices();
+        setRemoteDevices(nextDevices);
+        return nextDevices;
+      } catch (err) {
+        if (options.showError) {
+          onNotice({
+            kind: "error",
+            message: t("读取 GitHub 远端设备详情失败：{error}", {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          });
+        }
+        return null;
+      } finally {
+        setIsRemoteDevicesLoading(false);
+      }
+    },
+    [onNotice, t],
+  );
 
   useEffect(() => {
-    let alive = true;
-    void getGitHubSyncSettings().then((nextSettings) => {
-      if (!alive) {
-        return;
+    void refreshGitHubSyncSettings({ resetDraft: true, showError: true });
+    void refreshGitHubSyncRemoteDevices({ showError: true });
+
+    function refreshVisibleStatus() {
+      void refreshGitHubSyncSettings({ resetDraft: false });
+      void refreshGitHubSyncRemoteDevices();
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        refreshVisibleStatus();
       }
-      setSettings(nextSettings);
-      setDraft(draftFromSettings(nextSettings));
-    });
+    }
+
+    const refreshIntervalId = window.setInterval(
+      refreshVisibleStatus,
+      GITHUB_SYNC_STATUS_REFRESH_MS,
+    );
+    window.addEventListener("focus", refreshVisibleStatus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
-      alive = false;
+      window.clearInterval(refreshIntervalId);
+      window.removeEventListener("focus", refreshVisibleStatus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [refreshGitHubSyncRemoteDevices, refreshGitHubSyncSettings]);
 
   function updateDraft<K extends keyof GitHubSyncSettingsInput>(
     key: K,
@@ -100,7 +183,18 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
     setIsBusy(true);
     try {
       const result = await runGitHubSyncOnce();
+      await refreshGitHubSyncSettings({ resetDraft: false });
+      await refreshGitHubSyncRemoteDevices();
       onNotice({ kind: result.status === "error" ? "error" : "success", message: result.message });
+    } catch (err) {
+      await refreshGitHubSyncSettings({ resetDraft: false });
+      await refreshGitHubSyncRemoteDevices();
+      onNotice({
+        kind: "error",
+        message: t("GitHub 同步失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      });
     } finally {
       setIsBusy(false);
     }
@@ -110,7 +204,18 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
     setIsBusy(true);
     try {
       const result = await forceGitHubSyncBootstrapUpload();
+      await refreshGitHubSyncSettings({ resetDraft: false });
+      await refreshGitHubSyncRemoteDevices();
       onNotice({ kind: result.status === "error" ? "error" : "success", message: result.message });
+    } catch (err) {
+      await refreshGitHubSyncSettings({ resetDraft: false });
+      await refreshGitHubSyncRemoteDevices();
+      onNotice({
+        kind: "error",
+        message: t("强制重新上传 bootstrap 失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      });
     } finally {
       setIsBusy(false);
     }
@@ -130,9 +235,11 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
       }
 
       const syncResult = await forceGitHubSyncBootstrapUpload();
-      const refreshedSettings = await getGitHubSyncSettings();
-      setSettings(refreshedSettings);
-      setDraft(draftFromSettings(refreshedSettings));
+      const refreshedSettings = await refreshGitHubSyncSettings({ resetDraft: true });
+      if (!refreshedSettings) {
+        throw new Error(t("读取 GitHub 同步状态失败。"));
+      }
+      await refreshGitHubSyncRemoteDevices();
       onNotice({
         kind: syncResult.status === "error" ? "error" : "success",
         message: syncResult.message,
@@ -155,6 +262,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
   const lastImportLabel = settings?.last_import_at
     ? formatDateTime(settings.last_import_at)
     : t("尚未同步");
+  const lastMessageLabel = settings?.last_message || t("尚未执行");
 
   return (
     <section className="panel github-sync-panel">
@@ -278,7 +386,19 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
             {settings?.last_error ?? t("无")}
           </strong>
         </div>
+        <div className="sync-result-panel sync-status-message">
+          <span>{t("最近结果")}</span>
+          <strong className="sync-result-text" title={lastMessageLabel}>
+            {lastMessageLabel}
+          </strong>
+        </div>
       </div>
+
+      <GitHubSyncRemoteDeviceList
+        devices={remoteDevices}
+        isLoading={isRemoteDevicesLoading}
+        numberLocale={numberLocale}
+      />
 
       <p className="settings-footnote">
         {t("GitHub 只保存加密文件，但仓库路径、文件大小、commit 时间和日期文件名仍对 GitHub 可见。")}
@@ -298,6 +418,60 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
           {t("保存 GitHub 同步设置")}
         </button>
       </div>
+    </section>
+  );
+}
+
+function GitHubSyncRemoteDeviceList({
+  devices,
+  isLoading,
+  numberLocale,
+}: {
+  devices: GitHubSyncRemoteDevice[];
+  isLoading: boolean;
+  numberLocale: string;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <section className="github-remote-device-list" aria-busy={isLoading}>
+      <div className="github-remote-device-heading">
+        <div>
+          <h3>{t("远端设备详情")}</h3>
+          <p>{t("展示已从 GitHub 导入的远端设备、分片数量和导入后的统计规模。")}</p>
+        </div>
+        <span>{isLoading ? t("读取中...") : `${formatInteger(devices.length, numberLocale)} ${t("台设备")}`}</span>
+      </div>
+
+      {devices.length === 0 ? (
+        <p className="github-remote-empty">
+          {isLoading ? t("正在读取远端设备详情...") : t("暂无远端导入记录")}
+        </p>
+      ) : (
+        <div className="github-remote-device-table" role="table">
+          <div className="github-remote-device-row header" role="row">
+            <span role="columnheader">{t("远端设备")}</span>
+            <span role="columnheader">{t("bootstrap 分片")}</span>
+            <span role="columnheader">{t("day 分片")}</span>
+            <span role="columnheader">{t("最后导入")}</span>
+            <span role="columnheader">{t("调用数")}</span>
+            <span role="columnheader">Token</span>
+          </div>
+          {devices.map((device) => (
+            <div className="github-remote-device-row" key={device.device_id} role="row">
+              <span className="device-name" role="cell" title={device.device_id}>
+                <strong>{device.device_name || device.device_id}</strong>
+                <small>{device.device_id}</small>
+              </span>
+              <span role="cell">{formatInteger(device.bootstrap_shards, numberLocale)}</span>
+              <span role="cell">{formatInteger(device.day_shards, numberLocale)}</span>
+              <span role="cell">{formatDateTime(device.last_import_at, t("无"))}</span>
+              <span role="cell">{formatInteger(device.calls, numberLocale)}</span>
+              <span role="cell">{formatInteger(device.total_tokens, numberLocale)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

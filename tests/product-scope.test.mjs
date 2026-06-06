@@ -785,23 +785,39 @@ test("settings page exposes github encrypted sync controls", () => {
   assert.ok(githubSyncPanel.includes("Contents: Read and write"));
   assert.ok(githubSyncPanel.includes("保存并初始化同步仓库"));
   assert.ok(githubSyncPanel.includes("handleInitializeRepository"));
+  assert.ok(githubSyncPanel.includes("refreshGitHubSyncSettings"));
+  assert.ok(githubSyncPanel.includes("lastMessageLabel"));
+  assert.ok(githubSyncPanel.includes("最近结果"));
+  assert.ok(githubSyncPanel.includes("window.setInterval"));
+  assert.ok(githubSyncPanel.includes("await refreshGitHubSyncSettings({ resetDraft: false })"));
+  assert.ok(githubSyncPanel.includes("GitHubSyncRemoteDeviceList"));
+  assert.ok(githubSyncPanel.includes("远端设备详情"));
+  assert.ok(githubSyncPanel.includes("bootstrap 分片"));
+  assert.ok(githubSyncPanel.includes("day 分片"));
+  assert.ok(githubSyncPanel.includes("listGitHubSyncRemoteDevices"));
 
   assert.ok(dashboardService.includes("get_github_sync_settings"));
   assert.ok(dashboardService.includes("save_github_sync_settings"));
   assert.ok(dashboardService.includes("test_github_sync_connection"));
   assert.ok(dashboardService.includes("run_github_sync_once"));
+  assert.ok(dashboardService.includes("list_github_sync_remote_devices"));
   assert.ok(dashboardTypes.includes("interface GitHubSyncSettings"));
   assert.ok(dashboardTypes.includes("interface GitHubSyncRunResult"));
+  assert.ok(dashboardTypes.includes("interface GitHubSyncRemoteDevice"));
+  assert.ok(dashboardTypes.includes("last_message: string | null"));
 
   assert.ok(tauriEntrypoint.includes("get_github_sync_settings"));
   assert.ok(tauriEntrypoint.includes("save_github_sync_settings"));
   assert.ok(tauriEntrypoint.includes("test_github_sync_connection"));
   assert.ok(tauriEntrypoint.includes("run_github_sync_once"));
+  assert.ok(tauriEntrypoint.includes("list_github_sync_remote_devices"));
+  assert.ok(settingsCommands.includes("list_github_sync_remote_devices"));
   assert.ok(settingsCommands.includes("github_sync"));
   assert.ok(styles.includes(".github-sync-panel"));
   assert.ok(styles.includes(".github-sync-wizard"));
   assert.ok(styles.includes(".github-sync-form"));
   assert.ok(styles.includes(".github-sync-status"));
+  assert.ok(styles.includes(".github-remote-device-list"));
 });
 
 test("background sync interval allows one minute for github sync freshness", () => {
