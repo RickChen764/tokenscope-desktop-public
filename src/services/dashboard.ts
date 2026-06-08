@@ -2,6 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { translateRuntime as tr } from "../i18n";
+import {
+  defaultAppUpdateInfo,
+  normalizeAppUpdateInfo,
+  recoverStoredAppUpdateInfo,
+} from "./appUpdateState";
 import type {
   AgentImportResult,
   AgentSourceSummary,
@@ -22,7 +27,6 @@ import type {
   SyncSettingsInput,
   AppUpdateInfo,
   AppUpdateProgress,
-  AppUpdateStatus,
   TokenPulseSnapshot,
   TopDimensionRow,
   CustomImporterPreview,
@@ -49,6 +53,7 @@ export type AgentImportMode = "incremental" | "full";
 
 let pendingAppUpdate: Update | null = null;
 let appUpdateCheckPromise: Promise<AppUpdateInfo> | null = null;
+let hasWrittenAppUpdateInfoThisSession = false;
 const SYNC_SETTINGS_STORAGE_KEY = "tokenscope.syncSettings";
 const APP_UPDATE_STATE_STORAGE_KEY = "tokenscope.appUpdateInfo";
 export const APP_UPDATE_INFO_EVENT = "tokenscope:app-update-info";
@@ -284,56 +289,11 @@ function writeBrowserSyncSettings(settings: Partial<SyncSettings>) {
   return nextSettings;
 }
 
-function defaultAppUpdateInfo(status: AppUpdateStatus = "idle"): AppUpdateInfo {
-  return {
-    available: false,
-    current_version: null,
-    version: null,
-    date: null,
-    body: null,
-    status,
-    checked_at: null,
-    error: null,
-  };
-}
-
-function normalizeAppUpdateStatus(value: unknown): AppUpdateStatus {
-  switch (value) {
-    case "checking":
-    case "current":
-    case "available":
-    case "downloading":
-    case "installing":
-    case "error":
-    case "browser-preview":
-      return value;
-    case "idle":
-    default:
-      return "idle";
-  }
-}
-
-function normalizeAppUpdateInfo(input: Partial<AppUpdateInfo>): AppUpdateInfo {
-  const defaults = defaultAppUpdateInfo();
-  return {
-    ...defaults,
-    ...input,
-    available: Boolean(input.available),
-    current_version: input.current_version ?? null,
-    version: input.version ?? null,
-    date: input.date ?? null,
-    body: input.body ?? null,
-    status: normalizeAppUpdateStatus(input.status),
-    checked_at: input.checked_at ?? null,
-    error: input.error ?? null,
-  };
-}
-
 function stringifyError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function getStoredAppUpdateInfo() {
+function readStoredAppUpdateInfo() {
   if (typeof window === "undefined") {
     return defaultAppUpdateInfo();
   }
@@ -350,11 +310,29 @@ export function getStoredAppUpdateInfo() {
   }
 }
 
+export function getStoredAppUpdateInfo() {
+  const storedInfo = readStoredAppUpdateInfo();
+  const recoveredInfo = hasWrittenAppUpdateInfoThisSession
+    ? storedInfo
+    : recoverStoredAppUpdateInfo(storedInfo);
+
+  if (storedInfo.status !== recoveredInfo.status && typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(APP_UPDATE_STATE_STORAGE_KEY, JSON.stringify(recoveredInfo));
+    } catch {
+      // Update state only improves UX; the updater itself remains authoritative.
+    }
+  }
+
+  return recoveredInfo;
+}
+
 function writeStoredAppUpdateInfo(info: Partial<AppUpdateInfo>) {
   const nextInfo = normalizeAppUpdateInfo({
-    ...getStoredAppUpdateInfo(),
+    ...readStoredAppUpdateInfo(),
     ...info,
   });
+  hasWrittenAppUpdateInfoThisSession = true;
 
   if (typeof window !== "undefined") {
     try {

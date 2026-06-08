@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Duration, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -15,6 +15,8 @@ use super::ImportScope;
 
 const CODEX_THREAD_SOURCE: &str = "codex_state_threads";
 const CODEX_ROLLOUT_SOURCE: &str = "codex_rollout_token_counts";
+const CODEX_GENERAL_LIMIT_ID: &str = "codex";
+const CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES: i64 = 15;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexImportResult {
@@ -124,6 +126,7 @@ pub fn latest_codex_usage_limits_from_sessions_path(
     collect_rollout_jsonl_files(sessions_path, &mut rollout_files)?;
 
     let mut latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    let mut latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
     for rollout_path in rollout_files {
         let Ok(file) = File::open(&rollout_path) else {
             continue;
@@ -142,6 +145,13 @@ pub fn latest_codex_usage_limits_from_sessions_path(
                 continue;
             };
             let captured_at = captured_at.with_timezone(&Utc);
+            if snapshot.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID)
+                && latest_general
+                    .as_ref()
+                    .is_none_or(|(latest_general_at, _)| captured_at > *latest_general_at)
+            {
+                latest_general = Some((captured_at, snapshot.clone()));
+            }
             if latest
                 .as_ref()
                 .is_none_or(|(latest_at, _)| captured_at > *latest_at)
@@ -151,7 +161,18 @@ pub fn latest_codex_usage_limits_from_sessions_path(
         }
     }
 
-    Ok(latest.map(|(_, snapshot)| snapshot))
+    let Some((latest_at, latest_snapshot)) = latest else {
+        return Ok(None);
+    };
+
+    if let Some((latest_general_at, latest_general_snapshot)) = latest_general {
+        let max_staleness = Duration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
+        if latest_at.signed_duration_since(latest_general_at) <= max_staleness {
+            return Ok(Some(latest_general_snapshot));
+        }
+    }
+
+    Ok(Some(latest_snapshot))
 }
 
 pub async fn import_default_codex_threads(
@@ -958,6 +979,34 @@ mod tests {
         assert_eq!(snapshot.primary.remaining_percent, 95.0);
         assert_eq!(snapshot.secondary.remaining_percent, 82.0);
         assert!(snapshot.source_path.ends_with("new.jsonl"));
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
+
+    #[test]
+    fn prefers_general_codex_usage_limit_over_newer_model_specific_snapshot() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &nested_path.join("general.jsonl"),
+            r#"{"timestamp":"2026-06-08T02:59:58.072Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1780893660,"used_percent":7.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":25.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+        write_rollout(
+            &nested_path.join("spark.jsonl"),
+            r#"{"timestamp":"2026-06-08T03:00:23.644Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","plan_type":"pro","primary":{"resets_at":1780905551,"used_percent":0.0,"window_minutes":300},"secondary":{"resets_at":1781492351,"used_percent":0.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+
+        let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
+            .expect("session rollouts are scanned")
+            .expect("rate limit snapshot exists");
+
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshot.plan_type.as_deref(), Some("pro"));
+        assert_eq!(snapshot.primary.used_percent, 7.0);
+        assert_eq!(snapshot.secondary.used_percent, 25.0);
+        assert!(snapshot.source_path.ends_with("general.jsonl"));
 
         fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
     }

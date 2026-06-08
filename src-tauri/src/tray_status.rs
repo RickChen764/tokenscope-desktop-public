@@ -7,8 +7,8 @@ use tauri::menu::{
 };
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    App, AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position, Runtime,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window, WindowEvent, Wry,
+    App, AppHandle, CloseRequestApi, LogicalPosition, Manager, Monitor, PhysicalPosition, Position,
+    Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window, WindowEvent, Wry,
 };
 use tokio::time::sleep;
 
@@ -102,6 +102,9 @@ pub fn setup_token_pulse_tray(app: &App, repository: TokenScopeRepository) -> ta
         .build(app)?;
 
     spawn_token_pulse_tray_updater(tray, repository.clone());
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        track_main_window_close(window);
+    }
     setup_token_pulse_window(app, repository.clone())?;
     setup_token_pulse_detail_window(app)?;
     if TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED {
@@ -809,11 +812,31 @@ fn find_main_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> 
 }
 
 fn create_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
-    WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
-        .title(MAIN_WINDOW_TITLE)
-        .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
-        .min_inner_size(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT)
-        .build()
+    let window =
+        WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+            .title(MAIN_WINDOW_TITLE)
+            .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
+            .min_inner_size(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT)
+            .build()?;
+    track_main_window_close(window.clone());
+    Ok(window)
+}
+
+fn track_main_window_close<R: Runtime>(window: WebviewWindow<R>) {
+    let tracked_window = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            handle_main_window_close_requested(&tracked_window, api);
+        }
+    });
+}
+
+fn handle_main_window_close_requested<R: Runtime>(
+    window: &WebviewWindow<R>,
+    api: &CloseRequestApi,
+) {
+    api.prevent_close();
+    let _ = window.hide();
 }
 
 #[cfg(debug_assertions)]

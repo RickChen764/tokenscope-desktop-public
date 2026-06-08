@@ -814,6 +814,11 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   assert.ok(trayStatus.includes("toggle_token_pulse_window"));
   assert.ok(trayStatus.includes("token_pulse_window_currently_visible(app)"));
   assert.ok(trayStatus.includes("hide_token_pulse_window"));
+  assert.ok(trayStatus.includes("track_main_window_close"));
+  assert.ok(trayStatus.includes("handle_main_window_close_requested"));
+  assert.ok(trayStatus.includes("WindowEvent::CloseRequested"));
+  assert.ok(trayStatus.includes("api.prevent_close()"));
+  assert.ok(trayStatus.includes("window.hide()"));
   assert.ok(trayStatus.includes("window.unminimize()"));
   assert.ok(trayStatus.includes("app.webview_windows()"));
   assert.ok(trayStatus.includes("title == MAIN_WINDOW_TITLE"));
@@ -1114,6 +1119,9 @@ test("application updater keeps explicit persisted state and complete progress",
   assert.ok(dashboardService.includes("APP_UPDATE_STATE_STORAGE_KEY"));
   assert.ok(dashboardService.includes("getStoredAppUpdateInfo"));
   assert.ok(dashboardService.includes("writeStoredAppUpdateInfo"));
+  assert.ok(dashboardService.includes("hasWrittenAppUpdateInfoThisSession"));
+  assert.ok(dashboardService.includes("recoverStoredAppUpdateInfo(storedInfo)"));
+  assert.ok(dashboardService.includes("hasWrittenAppUpdateInfoThisSession = true"));
   assert.ok(dashboardService.includes('status: update ? "available" : "current"'));
   assert.ok(dashboardService.includes('event.event === "Finished"'));
   assert.ok(dashboardService.includes("writeStoredAppUpdateInfo({"));
