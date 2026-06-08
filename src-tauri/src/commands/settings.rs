@@ -9,7 +9,7 @@ use crate::db::{
     LlmCallFilters,
 };
 use crate::device_packages;
-use crate::github_sync;
+use crate::github_sync::{self, engine::GitHubSyncRuntimeStatus};
 use crate::AppState;
 
 #[tauri::command]
@@ -118,6 +118,13 @@ pub async fn get_github_sync_settings(
 }
 
 #[tauri::command]
+pub async fn get_github_sync_runtime_status(
+    state: State<'_, AppState>,
+) -> Result<GitHubSyncRuntimeStatus, String> {
+    Ok(state.github_sync_runtime.status())
+}
+
+#[tauri::command]
 pub async fn list_github_sync_remote_devices(
     state: State<'_, AppState>,
 ) -> Result<Vec<GitHubSyncRemoteDevice>, String> {
@@ -151,14 +158,29 @@ pub async fn test_github_sync_connection(
 pub async fn run_github_sync_once(
     state: State<'_, AppState>,
 ) -> Result<GitHubSyncRunResult, String> {
-    github_sync::engine::run_once(&state.repository, false).await
+    github_sync::engine::run_once_with_runtime(&state.repository, &state.github_sync_runtime, false)
+        .await
+}
+
+#[tauri::command]
+pub async fn force_reimport_github_sync_remote_device(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<GitHubSyncRunResult, String> {
+    github_sync::engine::force_reimport_remote_device_with_runtime(
+        &state.repository,
+        &state.github_sync_runtime,
+        &device_id,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn force_github_sync_bootstrap_upload(
     state: State<'_, AppState>,
 ) -> Result<GitHubSyncRunResult, String> {
-    github_sync::engine::run_once(&state.repository, true).await
+    github_sync::engine::run_once_with_runtime(&state.repository, &state.github_sync_runtime, true)
+        .await
 }
 
 fn default_export_dir() -> PathBuf {

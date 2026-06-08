@@ -9,7 +9,10 @@ use crate::db::{
     DataHealthIssueRow, DataHealthSummary, LlmCallFilters, LlmCallPage, LlmCallRow, SyncSettings,
     SyncSettingsInput, TokenPulseSnapshot, TopDimensionRow,
 };
-use crate::importers::codex::{import_default_codex_threads, CodexImportResult};
+use crate::importers::codex::{
+    get_default_codex_usage_limits, import_default_codex_threads, CodexImportResult,
+    CodexUsageLimitSnapshot,
+};
 use crate::importers::custom_sqlite::{
     import_custom_sqlite_profile, preview_custom_sqlite_importer, validate_profile_input,
 };
@@ -414,6 +417,11 @@ pub async fn import_codex_threads(state: State<'_, AppState>) -> Result<CodexImp
 }
 
 #[tauri::command]
+pub fn get_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    get_default_codex_usage_limits()
+}
+
+#[tauri::command]
 pub async fn detect_local_agents() -> Result<Vec<LocalAgentStatus>, String> {
     Ok(detect_agents())
 }
@@ -453,7 +461,12 @@ pub async fn save_sync_settings(
 
 #[tauri::command]
 pub async fn run_background_sync_once(state: State<'_, AppState>) -> Result<SyncSettings, String> {
-    let result = background_sync::run_once(&state.repository, &state.sync_runtime).await?;
+    let result = background_sync::run_once(
+        &state.repository,
+        &state.sync_runtime,
+        &state.github_sync_runtime,
+    )
+    .await?;
     let mut settings = state
         .repository
         .get_sync_settings()

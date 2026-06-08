@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -21,6 +21,28 @@ pub struct CodexImportResult {
     pub imported: i64,
     pub skipped: i64,
     pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexUsageLimitSnapshot {
+    pub captured_at: String,
+    pub source_path: String,
+    pub line_number: usize,
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
+    pub plan_type: Option<String>,
+    pub rate_limit_reached_type: Option<String>,
+    pub primary: CodexUsageLimitWindow,
+    pub secondary: CodexUsageLimitWindow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexUsageLimitWindow {
+    pub window_minutes: i64,
+    pub used_percent: f64,
+    pub remaining_percent: f64,
+    pub resets_at: Option<i64>,
+    pub resets_at_local: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -53,12 +75,83 @@ struct CodexRolloutTokenCount {
     total_token_usage: Option<RolloutTokenUsage>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CodexRawRateLimits {
+    limit_id: Option<String>,
+    limit_name: Option<String>,
+    plan_type: Option<String>,
+    rate_limit_reached_type: Option<String>,
+    primary: Option<CodexRawRateLimitWindow>,
+    secondary: Option<CodexRawRateLimitWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexRawRateLimitWindow {
+    window_minutes: Option<i64>,
+    used_percent: Option<f64>,
+    resets_at: Option<i64>,
+}
+
 pub fn default_codex_state_path() -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "unable to resolve user home directory".to_string())?;
 
     Ok(PathBuf::from(home).join(".codex").join("state_5.sqlite"))
+}
+
+pub fn default_codex_sessions_path() -> Result<PathBuf, String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "unable to resolve user home directory".to_string())?;
+
+    Ok(PathBuf::from(home).join(".codex").join("sessions"))
+}
+
+pub fn get_default_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    let sessions_path = default_codex_sessions_path()?;
+    latest_codex_usage_limits_from_sessions_path(&sessions_path)
+}
+
+pub fn latest_codex_usage_limits_from_sessions_path(
+    sessions_path: &Path,
+) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    if !sessions_path.exists() {
+        return Ok(None);
+    }
+
+    let mut rollout_files = Vec::new();
+    collect_rollout_jsonl_files(sessions_path, &mut rollout_files)?;
+
+    let mut latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    for rollout_path in rollout_files {
+        let Ok(file) = File::open(&rollout_path) else {
+            continue;
+        };
+
+        for (index, line) in BufReader::new(file).lines().enumerate() {
+            let Ok(line) = line else {
+                continue;
+            };
+            let Some(snapshot) =
+                rollout_line_to_usage_limit_snapshot(&rollout_path, index + 1, &line)
+            else {
+                continue;
+            };
+            let Ok(captured_at) = DateTime::parse_from_rfc3339(&snapshot.captured_at) else {
+                continue;
+            };
+            let captured_at = captured_at.with_timezone(&Utc);
+            if latest
+                .as_ref()
+                .is_none_or(|(latest_at, _)| captured_at > *latest_at)
+            {
+                latest = Some((captured_at, snapshot));
+            }
+        }
+    }
+
+    Ok(latest.map(|(_, snapshot)| snapshot))
 }
 
 pub async fn import_default_codex_threads(
@@ -490,6 +583,85 @@ fn rollout_line_to_token_count(line_number: usize, line: &str) -> Option<CodexRo
     })
 }
 
+fn rollout_line_to_usage_limit_snapshot(
+    source_path: &Path,
+    line_number: usize,
+    line: &str,
+) -> Option<CodexUsageLimitSnapshot> {
+    if !line.contains("\"token_count\"") || !line.contains("\"rate_limits\"") {
+        return None;
+    }
+
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "event_msg" {
+        return None;
+    }
+
+    let payload = value.get("payload")?;
+    if payload.get("type")?.as_str()? != "token_count" {
+        return None;
+    }
+
+    let rate_limits: CodexRawRateLimits =
+        serde_json::from_value(payload.get("rate_limits")?.clone()).ok()?;
+    let primary = codex_raw_rate_limit_window_to_snapshot(rate_limits.primary?)?;
+    let secondary = codex_raw_rate_limit_window_to_snapshot(rate_limits.secondary?)?;
+    let captured_at = value.get("timestamp")?.as_str()?.to_string();
+
+    Some(CodexUsageLimitSnapshot {
+        captured_at,
+        source_path: source_path.to_string_lossy().to_string(),
+        line_number,
+        limit_id: rate_limits.limit_id,
+        limit_name: rate_limits.limit_name,
+        plan_type: rate_limits.plan_type,
+        rate_limit_reached_type: rate_limits.rate_limit_reached_type,
+        primary,
+        secondary,
+    })
+}
+
+fn codex_raw_rate_limit_window_to_snapshot(
+    window: CodexRawRateLimitWindow,
+) -> Option<CodexUsageLimitWindow> {
+    let window_minutes = window.window_minutes?;
+    let used_percent = window.used_percent?;
+    let remaining_percent = (100.0 - used_percent).clamp(0.0, 100.0);
+    let resets_at_local = window.resets_at.and_then(|timestamp| {
+        DateTime::from_timestamp(timestamp, 0)
+            .map(|datetime| datetime.with_timezone(&Local).to_rfc3339())
+    });
+
+    Some(CodexUsageLimitWindow {
+        window_minutes,
+        used_percent,
+        remaining_percent,
+        resets_at: window.resets_at,
+        resets_at_local,
+    })
+}
+
+fn collect_rollout_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(root).map_err(|err| err.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|err| err.to_string())?;
+        if file_type.is_dir() {
+            collect_rollout_jsonl_files(&path, files)?;
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+        {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
 fn token_usage_delta(
     current_total: &RolloutTokenUsage,
     previous_total: Option<&RolloutTokenUsage>,
@@ -725,7 +897,7 @@ fn project_name_from_cwd(cwd: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use chrono::{DateTime, Local, Utc};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -736,7 +908,59 @@ mod tests {
 
     use crate::importers::ImportScope;
 
-    use super::{import_codex_threads_from_path, import_codex_threads_from_path_with_scope};
+    use super::{
+        import_codex_threads_from_path, import_codex_threads_from_path_with_scope,
+        latest_codex_usage_limits_from_sessions_path, rollout_line_to_usage_limit_snapshot,
+    };
+
+    #[test]
+    fn parses_codex_rate_limits_from_token_count_event() {
+        let line = r#"{"timestamp":"2026-06-06T07:35:24.355Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","limit_name":null,"plan_type":"pro","rate_limit_reached_type":null,"primary":{"resets_at":1780746229,"used_percent":5.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":18.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#;
+
+        let snapshot = rollout_line_to_usage_limit_snapshot(Path::new("rollout.jsonl"), 9, line)
+            .expect("rate limit snapshot is parsed");
+
+        assert_eq!(snapshot.captured_at, "2026-06-06T07:35:24.355Z");
+        assert_eq!(snapshot.source_path, "rollout.jsonl");
+        assert_eq!(snapshot.line_number, 9);
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshot.plan_type.as_deref(), Some("pro"));
+        assert_eq!(snapshot.primary.window_minutes, 300);
+        assert_eq!(snapshot.primary.used_percent, 5.0);
+        assert_eq!(snapshot.primary.remaining_percent, 95.0);
+        assert_eq!(snapshot.primary.resets_at, Some(1780746229));
+        assert_eq!(snapshot.secondary.window_minutes, 10080);
+        assert_eq!(snapshot.secondary.used_percent, 18.0);
+        assert_eq!(snapshot.secondary.remaining_percent, 82.0);
+        assert_eq!(snapshot.secondary.resets_at, Some(1781141316));
+    }
+
+    #[test]
+    fn finds_latest_codex_usage_limit_snapshot_from_session_rollouts() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &nested_path.join("old.jsonl"),
+            r#"{"timestamp":"2026-06-06T07:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1780746000,"used_percent":10.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":20.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+        write_rollout(
+            &nested_path.join("new.jsonl"),
+            r#"{"timestamp":"2026-06-06T07:35:24.355Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1780746229,"used_percent":5.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":18.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1200,"output_tokens":300,"total_tokens":1500}}}}"#,
+        );
+
+        let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
+            .expect("session rollouts are scanned")
+            .expect("latest rate limit snapshot exists");
+
+        assert_eq!(snapshot.captured_at, "2026-06-06T07:35:24.355Z");
+        assert_eq!(snapshot.primary.remaining_percent, 95.0);
+        assert_eq!(snapshot.secondary.remaining_percent, 82.0);
+        assert!(snapshot.source_path.ends_with("new.jsonl"));
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
 
     #[tokio::test]
     async fn imports_codex_threads_without_prompt_or_preview_text() {
@@ -1318,6 +1542,10 @@ mod tests {
 "#;
         fs::write(&path, content).expect("rollout fixture written");
         path
+    }
+
+    fn write_rollout(path: &Path, content: &str) {
+        fs::write(path, format!("{content}\n")).expect("rollout fixture written");
     }
 
     async fn set_codex_source_rollout_path(source_path: &PathBuf, rollout_path: &PathBuf) {

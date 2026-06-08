@@ -16,6 +16,7 @@ use tauri::Manager;
 pub struct AppState {
     pub repository: TokenScopeRepository,
     pub sync_runtime: background_sync::BackgroundSyncRuntime,
+    pub github_sync_runtime: github_sync::engine::GitHubSyncRuntime,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,13 +44,23 @@ pub fn run() {
             })?;
 
             let sync_runtime = background_sync::BackgroundSyncRuntime::default();
+            let github_sync_runtime = github_sync::engine::GitHubSyncRuntime::default();
             app.manage(AppState {
                 repository: repository.clone(),
                 sync_runtime: sync_runtime.clone(),
+                github_sync_runtime: github_sync_runtime.clone(),
             });
             tray_status::setup_token_pulse_tray(app, repository.clone())?;
-            background_sync::spawn_background_sync_loop(repository.clone(), sync_runtime.clone());
-            background_sync::spawn_launch_sync_if_enabled(repository, sync_runtime);
+            background_sync::spawn_background_sync_loop(
+                repository.clone(),
+                sync_runtime.clone(),
+                github_sync_runtime.clone(),
+            );
+            background_sync::spawn_launch_sync_if_enabled(
+                repository,
+                sync_runtime,
+                github_sync_runtime,
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,6 +71,8 @@ pub fn run() {
             tray_status::set_token_pulse_detail_hovered,
             tray_status::set_token_pulse_dragging,
             tray_status::show_token_pulse_context_menu,
+            tray_status::open_token_pulse_home,
+            tray_status::hide_token_pulse_window,
             tray_status::get_token_pulse_position_locked,
             tray_status::set_token_pulse_position_locked,
             commands::dashboard::get_dimension_summary,
@@ -84,6 +97,7 @@ pub fn run() {
             commands::dashboard::seed_demo_data,
             commands::dashboard::clear_demo_data,
             commands::dashboard::import_codex_threads,
+            commands::dashboard::get_codex_usage_limits,
             commands::dashboard::detect_local_agents,
             commands::dashboard::import_detected_agents,
             commands::dashboard::get_sync_settings,
@@ -96,10 +110,12 @@ pub fn run() {
             commands::settings::open_export_folder,
             commands::settings::remove_external_dataset,
             commands::settings::get_github_sync_settings,
+            commands::settings::get_github_sync_runtime_status,
             commands::settings::list_github_sync_remote_devices,
             commands::settings::save_github_sync_settings,
             commands::settings::test_github_sync_connection,
             commands::settings::run_github_sync_once,
+            commands::settings::force_reimport_github_sync_remote_device,
             commands::settings::force_github_sync_bootstrap_upload
         ])
         .run(tauri::generate_context!())

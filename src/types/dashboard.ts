@@ -7,6 +7,26 @@ export interface CodexImportResult {
   source_path: string;
 }
 
+export interface CodexUsageLimitWindow {
+  window_minutes: number;
+  used_percent: number;
+  remaining_percent: number;
+  resets_at: number | null;
+  resets_at_local: string | null;
+}
+
+export interface CodexUsageLimitSnapshot {
+  captured_at: string;
+  source_path: string;
+  line_number: number;
+  limit_id: string | null;
+  limit_name: string | null;
+  plan_type: string | null;
+  rate_limit_reached_type: string | null;
+  primary: CodexUsageLimitWindow;
+  secondary: CodexUsageLimitWindow;
+}
+
 export interface LocalAgentStatus {
   id: string;
   name: string;
@@ -112,6 +132,22 @@ export interface GitHubSyncRunResult {
   skipped: number;
   started_at: string;
   finished_at: string;
+}
+
+export interface GitHubSyncRuntimeStatus {
+  running: boolean;
+  mode: string | null;
+  phase: string | null;
+  message: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  last_status: string | null;
+  current_step: number;
+  total_steps: number;
+  uploaded_shards: number;
+  downloaded_shards: number;
+  imported: number;
+  skipped: number;
 }
 
 export type AppUpdateStatus =

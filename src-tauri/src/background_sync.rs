@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Local};
 
 use crate::db::{SyncRunResult, TokenScopeRepository};
-use crate::github_sync;
+use crate::github_sync::{self, engine::GitHubSyncRuntime};
 use crate::importers::{import_detected_agents, AgentImportResult};
 
 #[derive(Clone, Default)]
@@ -28,6 +28,7 @@ impl BackgroundSyncRuntime {
 pub async fn run_once(
     repository: &TokenScopeRepository,
     runtime: &BackgroundSyncRuntime,
+    github_sync_runtime: &GitHubSyncRuntime,
 ) -> Result<SyncRunResult, String> {
     let now = Local::now().to_rfc3339();
     if !runtime.try_start() {
@@ -69,11 +70,12 @@ pub async fn run_once(
         )
         .await
         .map_err(|err| err.to_string());
+    if record_result.is_ok() && !failed {
+        let _ = github_sync::engine::run_once_with_runtime(repository, github_sync_runtime, false)
+            .await;
+    }
     runtime.finish();
     record_result?;
-    if !failed {
-        let _ = github_sync::engine::run_once(repository, false).await;
-    }
 
     Ok(SyncRunResult {
         status: status.to_string(),
@@ -88,6 +90,7 @@ pub async fn run_once(
 pub fn spawn_background_sync_loop(
     repository: TokenScopeRepository,
     runtime: BackgroundSyncRuntime,
+    github_sync_runtime: GitHubSyncRuntime,
 ) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -99,7 +102,7 @@ pub fn spawn_background_sync_loop(
                 continue;
             }
 
-            let _ = run_once(&repository, &runtime).await;
+            let _ = run_once(&repository, &runtime, &github_sync_runtime).await;
         }
     });
 }
@@ -107,13 +110,14 @@ pub fn spawn_background_sync_loop(
 pub fn spawn_launch_sync_if_enabled(
     repository: TokenScopeRepository,
     runtime: BackgroundSyncRuntime,
+    github_sync_runtime: GitHubSyncRuntime,
 ) {
     tauri::async_runtime::spawn(async move {
         let Ok(settings) = repository.get_sync_settings().await else {
             return;
         };
         if settings.sync_on_startup {
-            let _ = run_once(&repository, &runtime).await;
+            let _ = run_once(&repository, &runtime, &github_sync_runtime).await;
         }
     });
 }

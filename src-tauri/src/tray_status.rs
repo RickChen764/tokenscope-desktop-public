@@ -34,9 +34,10 @@ const TOKEN_PULSE_MENU_EXIT: &str = "token-pulse-exit";
 const TOKEN_PULSE_CONTEXT_OPEN_MAIN: &str = "token-pulse-context-open-main";
 const TOKEN_PULSE_CONTEXT_HIDE: &str = "token-pulse-context-hide";
 const TOKEN_PULSE_CONTEXT_LOCK_POSITION: &str = "token-pulse-context-lock-position";
-const TOKEN_PULSE_COLLAPSED_WIDTH: f64 = 360.0;
-const TOKEN_PULSE_COLLAPSED_HEIGHT: f64 = 56.0;
+const TOKEN_PULSE_COLLAPSED_WIDTH: f64 = 430.0;
+const TOKEN_PULSE_COLLAPSED_HEIGHT: f64 = 64.0;
 const TOKEN_PULSE_DETAIL_WIDTH: f64 = 360.0;
+const TOKEN_PULSE_DETAIL_CODEX_WIDTH: f64 = 590.0;
 const TOKEN_PULSE_DETAIL_HEIGHT: f64 = 364.0;
 const TOKEN_PULSE_WINDOW_MARGIN: f64 = 16.0;
 const TOKEN_PULSE_DETAIL_GAP: f64 = 8.0;
@@ -44,6 +45,7 @@ const TOKEN_PULSE_HISTORY_DAYS: i64 = 30;
 const TOKEN_PULSE_REFRESH_SECONDS: u64 = 60;
 const TOKEN_PULSE_DETAIL_HIDE_DELAY_MS: u64 = 180;
 const TOKEN_PULSE_DRAG_DEBOUNCE_MS: u64 = 300;
+const TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED: bool = false;
 const TOKEN_PULSE_FULLSCREEN_GUARD_SECONDS: u64 = 2;
 
 #[derive(Debug, Default)]
@@ -80,10 +82,7 @@ fn token_pulse_hover_state() -> &'static Mutex<TokenPulseInteractionState> {
     TOKEN_PULSE_HOVER_STATE.get_or_init(|| Mutex::new(TokenPulseInteractionState::default()))
 }
 
-pub fn setup_token_pulse_tray(
-    app: &App,
-    repository: TokenScopeRepository,
-) -> tauri::Result<()> {
+pub fn setup_token_pulse_tray(app: &App, repository: TokenScopeRepository) -> tauri::Result<()> {
     let Some(icon) = app.default_window_icon().cloned() else {
         return Ok(());
     };
@@ -105,7 +104,9 @@ pub fn setup_token_pulse_tray(
     spawn_token_pulse_tray_updater(tray, repository.clone());
     setup_token_pulse_window(app, repository.clone())?;
     setup_token_pulse_detail_window(app)?;
-    spawn_token_pulse_fullscreen_guard(app_handle);
+    if TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED {
+        spawn_token_pulse_fullscreen_guard(app_handle);
+    }
     Ok(())
 }
 
@@ -115,6 +116,8 @@ pub fn set_token_pulse_detail_hovered(
     window: Window,
     source: String,
     hovered: bool,
+    detail_width: Option<f64>,
+    detail_height: Option<f64>,
 ) -> Result<(), String> {
     if window.label() != TOKEN_PULSE_WINDOW_LABEL
         && window.label() != TOKEN_PULSE_DETAIL_WINDOW_LABEL
@@ -134,7 +137,7 @@ pub fn set_token_pulse_detail_hovered(
     }
 
     if hovered && source == "mini" {
-        show_token_pulse_detail_window(&app, &window)?;
+        show_token_pulse_detail_window(&app, &window, detail_width, detail_height)?;
     } else {
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -203,6 +206,21 @@ pub fn show_token_pulse_context_menu(app: AppHandle, window: Window) -> Result<(
 }
 
 #[tauri::command]
+pub fn open_token_pulse_home(app: AppHandle, window: Window) -> Result<(), String> {
+    ensure_token_pulse_action_window(&window)?;
+    let _ = hide_token_pulse_detail_window(&app);
+    show_main_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_token_pulse_window(app: AppHandle, window: Window) -> Result<(), String> {
+    ensure_token_pulse_action_window(&window)?;
+    hide_token_pulse_window_inner(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_token_pulse_position_locked(app: AppHandle) -> bool {
     token_pulse_position_locked(&app)
 }
@@ -210,6 +228,16 @@ pub fn get_token_pulse_position_locked(app: AppHandle) -> bool {
 #[tauri::command]
 pub fn set_token_pulse_position_locked(app: AppHandle, locked: bool) -> Result<(), String> {
     set_token_pulse_position_locked_state(&app, locked)
+}
+
+fn ensure_token_pulse_action_window(window: &Window) -> Result<(), String> {
+    if window.label() == TOKEN_PULSE_WINDOW_LABEL
+        || window.label() == TOKEN_PULSE_DETAIL_WINDOW_LABEL
+    {
+        return Ok(());
+    }
+
+    Err("token pulse actions can only run from token pulse windows".to_string())
 }
 
 fn setup_token_pulse_window<R: Runtime>(
@@ -335,7 +363,12 @@ fn setup_token_pulse_detail_window<R: Runtime>(app: &App<R>) -> tauri::Result<()
     Ok(())
 }
 
-fn show_token_pulse_detail_window(app: &AppHandle, anchor_window: &Window) -> Result<(), String> {
+fn show_token_pulse_detail_window(
+    app: &AppHandle,
+    anchor_window: &Window,
+    requested_detail_width: Option<f64>,
+    requested_detail_height: Option<f64>,
+) -> Result<(), String> {
     let detail_window = app
         .get_webview_window(TOKEN_PULSE_DETAIL_WINDOW_LABEL)
         .ok_or_else(|| "token pulse detail window was not found".to_string())?;
@@ -350,9 +383,46 @@ fn show_token_pulse_detail_window(app: &AppHandle, anchor_window: &Window) -> Re
     let scale_factor = anchor_window
         .scale_factor()
         .map_err(|err| err.to_string())?;
+    let anchor_size = anchor_window
+        .outer_size()
+        .ok()
+        .filter(|size| size.width > 0 && size.height > 0);
+    let (anchor_width, anchor_height) = anchor_size
+        .map(|size| {
+            (
+                size.width as f64 / scale_factor,
+                size.height as f64 / scale_factor,
+            )
+        })
+        .unwrap_or((TOKEN_PULSE_COLLAPSED_WIDTH, TOKEN_PULSE_COLLAPSED_HEIGHT));
+    let detail_scale_factor = detail_window.scale_factor().unwrap_or(scale_factor);
+    let measured_detail_size = detail_window
+        .outer_size()
+        .ok()
+        .filter(|size| size.width > 0 && size.height > 0)
+        .map(|size| {
+            (
+                size.width as f64 / detail_scale_factor,
+                size.height as f64 / detail_scale_factor,
+            )
+        });
+    let requested_detail_size = requested_detail_width
+        .zip(requested_detail_height)
+        .filter(|(width, height)| *width > 0.0 && *height > 0.0);
+    let (detail_width, detail_height) = requested_detail_size
+        .or(measured_detail_size)
+        .unwrap_or((TOKEN_PULSE_DETAIL_CODEX_WIDTH, TOKEN_PULSE_DETAIL_HEIGHT));
     let anchor_x = anchor_position.x as f64 / scale_factor;
     let anchor_y = anchor_position.y as f64 / scale_factor;
-    let (x, y) = token_pulse_detail_window_position_for_anchor(&monitor, anchor_x, anchor_y);
+    let (x, y) = token_pulse_detail_window_position_for_anchor(
+        &monitor,
+        anchor_x,
+        anchor_y,
+        anchor_width,
+        anchor_height,
+        detail_width,
+        detail_height,
+    );
 
     detail_window
         .set_position(Position::Logical(LogicalPosition::new(
@@ -536,23 +606,22 @@ fn token_pulse_detail_window_position_for_anchor(
     monitor: &Monitor,
     anchor_x: f64,
     anchor_y: f64,
+    anchor_width: f64,
+    anchor_height: f64,
+    detail_width: f64,
+    detail_height: f64,
 ) -> (f64, f64) {
     let work_area = logical_work_area(monitor);
-    let preferred_y = anchor_y - TOKEN_PULSE_DETAIL_HEIGHT - TOKEN_PULSE_DETAIL_GAP;
-    let fallback_y = anchor_y + TOKEN_PULSE_COLLAPSED_HEIGHT + TOKEN_PULSE_DETAIL_GAP;
+    let detail_x = anchor_x + anchor_width - detail_width;
+    let preferred_y = anchor_y - detail_height - TOKEN_PULSE_DETAIL_GAP;
+    let fallback_y = anchor_y + anchor_height + TOKEN_PULSE_DETAIL_GAP;
     let detail_y = if preferred_y >= work_area.y + TOKEN_PULSE_WINDOW_MARGIN {
         preferred_y
     } else {
         fallback_y
     };
 
-    clamp_token_pulse_position(
-        work_area,
-        anchor_x,
-        detail_y,
-        TOKEN_PULSE_DETAIL_WIDTH,
-        TOKEN_PULSE_DETAIL_HEIGHT,
-    )
+    clamp_token_pulse_position(work_area, detail_x, detail_y, detail_width, detail_height)
 }
 
 fn spawn_token_pulse_tray_updater<R: Runtime>(
@@ -620,7 +689,7 @@ pub fn handle_token_pulse_menu_event<R: Runtime>(app: &AppHandle<R>, event: Menu
     match event.id().as_ref() {
         TOKEN_PULSE_MENU_OPEN_MAIN | TOKEN_PULSE_CONTEXT_OPEN_MAIN => show_main_window(app),
         TOKEN_PULSE_MENU_TOGGLE_VISIBLE => toggle_token_pulse_window(app),
-        TOKEN_PULSE_CONTEXT_HIDE => hide_token_pulse_window(app),
+        TOKEN_PULSE_CONTEXT_HIDE => hide_token_pulse_window_inner(app),
         TOKEN_PULSE_CONTEXT_LOCK_POSITION => {
             let locked = !token_pulse_position_locked(app);
             let _ = set_token_pulse_position_locked_state(app, locked);
@@ -658,7 +727,7 @@ fn set_token_pulse_window_visible<R: Runtime>(app: &AppHandle<R>, visible: bool)
     set_token_pulse_tray_toggle_checked(app, visible);
 
     if visible {
-        if is_probably_fullscreen() {
+        if TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED && is_probably_fullscreen() {
             #[cfg(debug_assertions)]
             eprintln!("[tokenscope] token pulse hidden because foreground window is fullscreen");
 
@@ -696,7 +765,7 @@ fn set_token_pulse_tray_toggle_checked<R: Runtime>(app: &AppHandle<R>, visible: 
     let _ = tray.set_menu(Some(tray_menu));
 }
 
-fn hide_token_pulse_window<R: Runtime>(app: &AppHandle<R>) {
+fn hide_token_pulse_window_inner<R: Runtime>(app: &AppHandle<R>) {
     set_token_pulse_window_visible(app, false);
 }
 
@@ -740,15 +809,11 @@ fn find_main_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> 
 }
 
 fn create_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
-    WebviewWindowBuilder::new(
-        app,
-        MAIN_WINDOW_LABEL,
-        WebviewUrl::App("index.html".into()),
-    )
-    .title(MAIN_WINDOW_TITLE)
-    .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
-    .min_inner_size(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT)
-    .build()
+    WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+        .title(MAIN_WINDOW_TITLE)
+        .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
+        .min_inner_size(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT)
+        .build()
 }
 
 #[cfg(debug_assertions)]
@@ -828,9 +893,7 @@ fn is_probably_fullscreen() -> bool {
 #[cfg(target_os = "windows")]
 fn windows_foreground_window_is_fullscreen() -> bool {
     use windows_sys::Win32::Foundation::{HWND, RECT};
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
-    };
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
@@ -901,7 +964,11 @@ impl From<windows_sys::Win32::Foundation::RECT> for DesktopRect {
 }
 
 #[cfg(target_os = "windows")]
-fn rect_covers_monitor_area(rect: DesktopRect, monitor: DesktopRect, work_area: DesktopRect) -> bool {
+fn rect_covers_monitor_area(
+    rect: DesktopRect,
+    monitor: DesktopRect,
+    work_area: DesktopRect,
+) -> bool {
     const FULLSCREEN_TOLERANCE_PX: i32 = 2;
 
     if !rect_matches(monitor, work_area, FULLSCREEN_TOLERANCE_PX)

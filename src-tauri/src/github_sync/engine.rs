@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use chrono::Local;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::{
     GitHubSyncConnectionTestResult, GitHubSyncRunResult, GitHubSyncSettings,
@@ -20,6 +21,163 @@ use crate::github_sync::packages::{
 pub enum SyncRunMode {
     Normal,
     ForceBootstrap,
+    ForceRemoteReimport,
+}
+
+impl SyncRunMode {
+    fn as_status(self) -> &'static str {
+        match self {
+            SyncRunMode::Normal => "normal",
+            SyncRunMode::ForceBootstrap => "force_bootstrap",
+            SyncRunMode::ForceRemoteReimport => "force_remote_reimport",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncRuntimeStatus {
+    pub running: bool,
+    pub mode: Option<String>,
+    pub phase: Option<String>,
+    pub message: Option<String>,
+    pub started_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub last_status: Option<String>,
+    pub current_step: i64,
+    pub total_steps: i64,
+    pub uploaded_shards: i64,
+    pub downloaded_shards: i64,
+    pub imported: i64,
+    pub skipped: i64,
+}
+
+impl Default for GitHubSyncRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            running: false,
+            mode: None,
+            phase: None,
+            message: None,
+            started_at: None,
+            updated_at: None,
+            last_status: None,
+            current_step: 0,
+            total_steps: 0,
+            uploaded_shards: 0,
+            downloaded_shards: 0,
+            imported: 0,
+            skipped: 0,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct GitHubSyncRuntimeState {
+    next_run_id: u64,
+    active_run_id: Option<u64>,
+    status: GitHubSyncRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GitHubSyncRuntime {
+    state: Arc<Mutex<GitHubSyncRuntimeState>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GitHubSyncRunGuard {
+    run_id: u64,
+}
+
+impl GitHubSyncRuntime {
+    pub fn try_start(&self, mode: SyncRunMode) -> Option<GitHubSyncRunGuard> {
+        let mut state = self.state.lock().expect("github sync runtime lock");
+        if state.status.running {
+            return None;
+        }
+
+        state.next_run_id += 1;
+        let run_id = state.next_run_id;
+        let now = Local::now().to_rfc3339();
+        state.active_run_id = Some(run_id);
+        state.status = GitHubSyncRuntimeStatus {
+            running: true,
+            mode: Some(mode.as_status().to_string()),
+            phase: Some("starting".to_string()),
+            message: Some("正在启动 GitHub 同步...".to_string()),
+            started_at: Some(now.clone()),
+            updated_at: Some(now),
+            last_status: None,
+            current_step: 0,
+            total_steps: 0,
+            uploaded_shards: 0,
+            downloaded_shards: 0,
+            imported: 0,
+            skipped: 0,
+        };
+
+        Some(GitHubSyncRunGuard { run_id })
+    }
+
+    pub fn status(&self) -> GitHubSyncRuntimeStatus {
+        self.state
+            .lock()
+            .expect("github sync runtime lock")
+            .status
+            .clone()
+    }
+
+    pub fn update_phase(&self, phase: &str, message: impl Into<String>) {
+        let mut state = self.state.lock().expect("github sync runtime lock");
+        if !state.status.running {
+            return;
+        }
+        state.status.phase = Some(phase.to_string());
+        state.status.message = Some(message.into());
+        state.status.updated_at = Some(Local::now().to_rfc3339());
+    }
+
+    fn update_progress(
+        &self,
+        phase: &str,
+        message: impl Into<String>,
+        current_step: i64,
+        total_steps: i64,
+    ) {
+        let mut state = self.state.lock().expect("github sync runtime lock");
+        if !state.status.running {
+            return;
+        }
+        state.status.phase = Some(phase.to_string());
+        state.status.message = Some(message.into());
+        state.status.current_step = current_step.max(0);
+        state.status.total_steps = total_steps.max(0);
+        state.status.updated_at = Some(Local::now().to_rfc3339());
+    }
+
+    fn update_counts(&self, uploaded_shards: i64, summary: &GitHubSyncDownloadSummary) {
+        let mut state = self.state.lock().expect("github sync runtime lock");
+        if !state.status.running {
+            return;
+        }
+        state.status.uploaded_shards = uploaded_shards;
+        state.status.downloaded_shards = summary.downloaded_shards;
+        state.status.imported = summary.imported;
+        state.status.skipped = summary.skipped;
+        state.status.updated_at = Some(Local::now().to_rfc3339());
+    }
+
+    pub fn finish(&self, guard: &GitHubSyncRunGuard, status: &str, message: impl Into<String>) {
+        let mut state = self.state.lock().expect("github sync runtime lock");
+        if state.active_run_id != Some(guard.run_id) {
+            return;
+        }
+        state.active_run_id = None;
+        state.status.running = false;
+        state.status.phase = Some("finished".to_string());
+        state.status.message = Some(message.into());
+        state.status.last_status = Some(status.to_string());
+        state.status.updated_at = Some(Local::now().to_rfc3339());
+    }
 }
 
 #[allow(async_fn_in_trait)]
@@ -97,19 +255,56 @@ pub async fn test_connection(
     })
 }
 
-pub async fn run_once(
+pub async fn run_once_with_runtime(
     repository: &TokenScopeRepository,
+    runtime: &GitHubSyncRuntime,
     force_bootstrap: bool,
 ) -> Result<GitHubSyncRunResult, String> {
-    let result = run_once_inner(repository, force_bootstrap).await;
+    let mode = if force_bootstrap {
+        SyncRunMode::ForceBootstrap
+    } else {
+        SyncRunMode::Normal
+    };
+    let Some(guard) = runtime.try_start(mode) else {
+        return Ok(busy_result(runtime.status()));
+    };
+
+    let result = run_once_inner(repository, force_bootstrap, Some(runtime)).await;
     record_error_result(repository, &result).await;
+    match &result {
+        Ok(result) => runtime.finish(&guard, &result.status, &result.message),
+        Err(err) => runtime.finish(&guard, "error", err),
+    }
+    result
+}
+
+pub async fn force_reimport_remote_device_with_runtime(
+    repository: &TokenScopeRepository,
+    runtime: &GitHubSyncRuntime,
+    remote_device_id: &str,
+) -> Result<GitHubSyncRunResult, String> {
+    let Some(guard) = runtime.try_start(SyncRunMode::ForceRemoteReimport) else {
+        return Ok(busy_result(runtime.status()));
+    };
+
+    let result =
+        force_reimport_remote_device_inner(repository, remote_device_id, Some(runtime)).await;
+    record_error_result(repository, &result).await;
+    match &result {
+        Ok(result) => runtime.finish(&guard, &result.status, &result.message),
+        Err(err) => runtime.finish(&guard, "error", err),
+    }
     result
 }
 
 async fn run_once_inner(
     repository: &TokenScopeRepository,
     force_bootstrap: bool,
+    runtime: Option<&GitHubSyncRuntime>,
 ) -> Result<GitHubSyncRunResult, String> {
+    if let Some(runtime) = runtime {
+        runtime.update_phase("prepare", "读取 GitHub 同步配置");
+    }
     let settings = repository
         .get_github_sync_settings()
         .await
@@ -137,6 +332,44 @@ async fn run_once_inner(
             SyncRunMode::Normal
         },
         settings,
+        runtime,
+    )
+    .await
+}
+
+async fn force_reimport_remote_device_inner(
+    repository: &TokenScopeRepository,
+    remote_device_id: &str,
+    runtime: Option<&GitHubSyncRuntime>,
+) -> Result<GitHubSyncRunResult, String> {
+    if let Some(runtime) = runtime {
+        runtime.update_phase("prepare", "读取 GitHub 同步配置");
+    }
+    let settings = repository
+        .get_github_sync_settings()
+        .await
+        .map_err(|err| err.to_string())?;
+    if !settings.enabled {
+        return Ok(disabled_result());
+    }
+    let token = repository
+        .github_sync_secret("token")
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "GitHub personal access token 未配置。".to_string())?;
+    let transport = GitHubContentsClient::new(
+        settings.owner.clone(),
+        settings.repo.clone(),
+        settings.branch.clone(),
+        token,
+    );
+
+    force_reimport_remote_device_with_settings(
+        repository,
+        &transport,
+        settings,
+        remote_device_id,
+        runtime,
     )
     .await
 }
@@ -151,9 +384,103 @@ pub async fn run_github_sync_once_with_transport<T: GitHubSyncTransport>(
         .get_github_sync_settings()
         .await
         .map_err(|err| err.to_string())?;
-    let result = run_with_settings(repository, transport, mode, settings).await;
+    let result = run_with_settings(repository, transport, mode, settings, None).await;
     record_error_result(repository, &result).await;
     result
+}
+
+#[cfg(test)]
+pub async fn force_reimport_remote_device_with_transport<T: GitHubSyncTransport>(
+    repository: &TokenScopeRepository,
+    transport: &T,
+    remote_device_id: &str,
+) -> Result<GitHubSyncRunResult, String> {
+    let settings = repository
+        .get_github_sync_settings()
+        .await
+        .map_err(|err| err.to_string())?;
+    let result = force_reimport_remote_device_with_settings(
+        repository,
+        transport,
+        settings,
+        remote_device_id,
+        None,
+    )
+    .await;
+    record_error_result(repository, &result).await;
+    result
+}
+
+async fn force_reimport_remote_device_with_settings<T: GitHubSyncTransport>(
+    repository: &TokenScopeRepository,
+    transport: &T,
+    settings: GitHubSyncSettings,
+    remote_device_id: &str,
+    runtime: Option<&GitHubSyncRuntime>,
+) -> Result<GitHubSyncRunResult, String> {
+    let started_at = Local::now().to_rfc3339();
+    if !settings.enabled {
+        return Ok(disabled_result_with_started_at(started_at));
+    }
+    let remote_device_id = remote_device_id.trim();
+    if remote_device_id.is_empty() {
+        return Err("远端设备 ID 不能为空。".to_string());
+    }
+    let sync_password = repository
+        .github_sync_secret("sync_password")
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "GitHub 同步密码未配置。".to_string())?;
+    let local_device_id = repository
+        .get_or_create_local_device_id()
+        .await
+        .map_err(|err| err.to_string())?;
+    if remote_device_id == local_device_id {
+        return Err("不能将当前设备作为远端设备重新导入。".to_string());
+    }
+
+    let layout = GitHubSyncLayout::new(settings.path_prefix.clone());
+    let mut summary = GitHubSyncDownloadSummary::default();
+    if let Some(runtime) = runtime {
+        runtime.update_phase("download", format!("重新导入远端设备 {remote_device_id}"));
+    }
+    download_remote_device_updates(
+        repository,
+        transport,
+        &layout,
+        remote_device_id,
+        &sync_password,
+        0,
+        runtime,
+        true,
+        &mut summary,
+    )
+    .await?;
+
+    if summary.downloaded_shards == 0 {
+        return Err(format!("未找到远端设备 {remote_device_id} 的可导入分片。"));
+    }
+
+    let finished_at = Local::now().to_rfc3339();
+    let message = format!(
+        "GitHub 远端设备重新导入完成：设备 {remote_device_id}，下载 {} 个分片，导入 {} 条记录。",
+        summary.downloaded_shards, summary.imported
+    );
+    repository
+        .record_github_sync_run("success", &message, None, Some(&finished_at))
+        .await
+        .map_err(|err| err.to_string())?;
+
+    Ok(GitHubSyncRunResult {
+        status: "success".to_string(),
+        message,
+        uploaded_shards: 0,
+        downloaded_shards: summary.downloaded_shards,
+        imported: summary.imported,
+        skipped: summary.skipped,
+        started_at,
+        finished_at,
+    })
 }
 
 async fn run_with_settings<T: GitHubSyncTransport>(
@@ -161,6 +488,7 @@ async fn run_with_settings<T: GitHubSyncTransport>(
     transport: &T,
     mode: SyncRunMode,
     settings: GitHubSyncSettings,
+    runtime: Option<&GitHubSyncRuntime>,
 ) -> Result<GitHubSyncRunResult, String> {
     let started_at = Local::now().to_rfc3339();
     if !settings.enabled {
@@ -176,6 +504,9 @@ async fn run_with_settings<T: GitHubSyncTransport>(
         .await
         .map_err(|err| err.to_string())?;
     let layout = GitHubSyncLayout::new(settings.path_prefix.clone());
+    if let Some(runtime) = runtime {
+        runtime.update_phase("export", "导出本机 GitHub 同步分片");
+    }
     let bootstrap_package =
         export_github_sync_package(repository, GitHubSyncShardSelector::Bootstrap).await?;
     let local_dates = bootstrap_package
@@ -190,6 +521,9 @@ async fn run_with_settings<T: GitHubSyncTransport>(
     if should_upload_bootstrap {
         let path = layout.bootstrap_path(&device_id);
         let hash = package_content_hash(&bootstrap_package)?;
+        if let Some(runtime) = runtime {
+            runtime.update_progress("upload", "上传本机 bootstrap 分片", 1, 1);
+        }
         upload_package(
             transport,
             &path,
@@ -215,7 +549,16 @@ async fn run_with_settings<T: GitHubSyncTransport>(
             .map_err(|err| err.to_string())?;
         uploaded_shards += 1;
     } else {
-        for date in local_dates {
+        let total_dates = local_dates.len() as i64;
+        for (index, date) in local_dates.into_iter().enumerate() {
+            if let Some(runtime) = runtime {
+                runtime.update_progress(
+                    "upload",
+                    format!("检查本机 day 分片 {}/{}", index + 1, total_dates),
+                    (index + 1) as i64,
+                    total_dates,
+                );
+            }
             let package =
                 export_github_sync_package(repository, GitHubSyncShardSelector::Day(date.clone()))
                     .await?;
@@ -233,6 +576,14 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                 continue;
             }
             let path = layout.day_path(&device_id, &date);
+            if let Some(runtime) = runtime {
+                runtime.update_progress(
+                    "upload",
+                    format!("上传本机 day 分片 {date}"),
+                    (index + 1) as i64,
+                    total_dates,
+                );
+            }
             upload_plaintext(
                 transport,
                 &path,
@@ -253,14 +604,34 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                 .await
                 .map_err(|err| err.to_string())?;
             uploaded_shards += 1;
+            if let Some(runtime) = runtime {
+                runtime.update_counts(uploaded_shards, &GitHubSyncDownloadSummary::default());
+            }
         }
     }
 
     if uploaded_shards > 0 {
+        if let Some(runtime) = runtime {
+            runtime.update_phase("manifest", "上传本机设备清单");
+        }
         upload_manifest(transport, &layout, &device_id, &sync_password).await?;
     }
-    let download_summary =
-        download_remote_updates(repository, transport, &layout, &device_id, &sync_password).await?;
+    if let Some(runtime) = runtime {
+        runtime.update_phase("download", "读取远端设备分片");
+    }
+    let download_summary = download_remote_updates(
+        repository,
+        transport,
+        &layout,
+        &device_id,
+        &sync_password,
+        uploaded_shards,
+        runtime,
+    )
+    .await?;
+    if let Some(runtime) = runtime {
+        runtime.update_counts(uploaded_shards, &download_summary);
+    }
     let finished_at = Local::now().to_rfc3339();
     let message = format!(
         "GitHub 同步完成：上传 {uploaded_shards} 个本机分片，下载 {} 个远端分片，导入 {} 条记录。",
@@ -302,15 +673,31 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
     layout: &GitHubSyncLayout,
     local_device_id: &str,
     sync_password: &str,
+    uploaded_shards: i64,
+    runtime: Option<&GitHubSyncRuntime>,
 ) -> Result<GitHubSyncDownloadSummary, String> {
     let mut summary = GitHubSyncDownloadSummary::default();
     let mut device_ids = transport.list_device_dirs(layout).await?;
     device_ids.sort();
     device_ids.dedup();
 
-    for remote_device_id in device_ids {
+    let total_devices = device_ids.len() as i64;
+    for (device_index, remote_device_id) in device_ids.into_iter().enumerate() {
         if remote_device_id == local_device_id {
             continue;
+        }
+        if let Some(runtime) = runtime {
+            runtime.update_progress(
+                "download",
+                format!(
+                    "读取远端设备 {} ({}/{})",
+                    remote_device_id,
+                    device_index + 1,
+                    total_devices
+                ),
+                (device_index + 1) as i64,
+                total_devices,
+            );
         }
 
         let bootstrap_path = layout.bootstrap_path(&remote_device_id);
@@ -319,29 +706,114 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
             transport,
             &bootstrap_path,
             sync_password,
+            false,
             &mut summary,
         )
         .await?;
+        if let Some(runtime) = runtime {
+            runtime.update_counts(uploaded_shards, &summary);
+        }
 
         let mut day_files = transport.list_day_files(layout, &remote_device_id).await?;
         day_files.sort_by(|left, right| left.path.cmp(&right.path));
-        for day_file in day_files {
+        let total_day_files = day_files.len() as i64;
+        for (file_index, day_file) in day_files.into_iter().enumerate() {
             if parse_day_file_date(&day_file.name).is_none() {
                 summary.skipped += 1;
                 continue;
+            }
+            if let Some(runtime) = runtime {
+                runtime.update_progress(
+                    "download",
+                    format!(
+                        "导入远端 day 分片 {} ({}/{})",
+                        day_file.name,
+                        file_index + 1,
+                        total_day_files
+                    ),
+                    (file_index + 1) as i64,
+                    total_day_files,
+                );
             }
             import_remote_shard(
                 repository,
                 transport,
                 &day_file.path,
                 sync_password,
+                false,
                 &mut summary,
             )
             .await?;
+            if let Some(runtime) = runtime {
+                runtime.update_counts(uploaded_shards, &summary);
+            }
         }
     }
 
     Ok(summary)
+}
+
+async fn download_remote_device_updates<T: GitHubSyncTransport>(
+    repository: &TokenScopeRepository,
+    transport: &T,
+    layout: &GitHubSyncLayout,
+    remote_device_id: &str,
+    sync_password: &str,
+    uploaded_shards: i64,
+    runtime: Option<&GitHubSyncRuntime>,
+    force_reimport: bool,
+    summary: &mut GitHubSyncDownloadSummary,
+) -> Result<(), String> {
+    let bootstrap_path = layout.bootstrap_path(remote_device_id);
+    import_remote_shard(
+        repository,
+        transport,
+        &bootstrap_path,
+        sync_password,
+        force_reimport,
+        summary,
+    )
+    .await?;
+    if let Some(runtime) = runtime {
+        runtime.update_counts(uploaded_shards, summary);
+    }
+
+    let mut day_files = transport.list_day_files(layout, remote_device_id).await?;
+    day_files.sort_by(|left, right| left.path.cmp(&right.path));
+    let total_day_files = day_files.len() as i64;
+    for (file_index, day_file) in day_files.into_iter().enumerate() {
+        if parse_day_file_date(&day_file.name).is_none() {
+            summary.skipped += 1;
+            continue;
+        }
+        if let Some(runtime) = runtime {
+            runtime.update_progress(
+                "download",
+                format!(
+                    "导入远端 day 分片 {} ({}/{})",
+                    day_file.name,
+                    file_index + 1,
+                    total_day_files
+                ),
+                (file_index + 1) as i64,
+                total_day_files,
+            );
+        }
+        import_remote_shard(
+            repository,
+            transport,
+            &day_file.path,
+            sync_password,
+            force_reimport,
+            summary,
+        )
+        .await?;
+        if let Some(runtime) = runtime {
+            runtime.update_counts(uploaded_shards, summary);
+        }
+    }
+
+    Ok(())
 }
 
 async fn import_remote_shard<T: GitHubSyncTransport>(
@@ -349,6 +821,7 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
     transport: &T,
     path: &str,
     sync_password: &str,
+    force_reimport: bool,
     summary: &mut GitHubSyncDownloadSummary,
 ) -> Result<(), String> {
     let Some(file) = transport.get_file(path).await? else {
@@ -364,13 +837,14 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
     let shard_kind = package.shard.kind.clone();
     let shard_date = package.shard.date.clone();
 
-    if repository
-        .github_sync_shard(&remote_device_id, &shard_kind, shard_date.as_deref())
-        .await
-        .map_err(|err| err.to_string())?
-        .as_ref()
-        .map(|state| state.content_hash.as_str() == content_hash)
-        .unwrap_or(false)
+    if !force_reimport
+        && repository
+            .github_sync_shard(&remote_device_id, &shard_kind, shard_date.as_deref())
+            .await
+            .map_err(|err| err.to_string())?
+            .as_ref()
+            .map(|state| state.content_hash.as_str() == content_hash)
+            .unwrap_or(false)
     {
         summary.skipped += 1;
         return Ok(());
@@ -493,6 +967,20 @@ struct GitHubSyncDownloadSummary {
 
 fn disabled_result() -> GitHubSyncRunResult {
     disabled_result_with_started_at(Local::now().to_rfc3339())
+}
+
+fn busy_result(status: GitHubSyncRuntimeStatus) -> GitHubSyncRunResult {
+    let now = Local::now().to_rfc3339();
+    GitHubSyncRunResult {
+        status: "busy".to_string(),
+        message: "已有 GitHub 同步任务正在执行。".to_string(),
+        uploaded_shards: status.uploaded_shards,
+        downloaded_shards: status.downloaded_shards,
+        imported: status.imported,
+        skipped: status.skipped,
+        started_at: status.started_at.unwrap_or_else(|| now.clone()),
+        finished_at: now,
+    }
 }
 
 fn disabled_result_with_started_at(started_at: String) -> GitHubSyncRunResult {
@@ -805,6 +1293,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn force_reimport_remote_device_ignores_recorded_hash_and_repairs_imported_rows() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
+        let transport = FakeGitHubTransport::default();
+        let remote_package = remote_day_package("remote-a", "2026-06-05", 300);
+        let plaintext = package_bytes(&remote_package).expect("package serializes");
+        let content_hash = content_hash_hex(&plaintext);
+        transport.seed_file(
+            &layout.day_path("remote-a", "2026-06-05"),
+            encrypted_package_bytes(&remote_package, "sync-password"),
+        );
+
+        repository
+            .record_github_sync_shard(&GitHubSyncShardStateInput {
+                device_id: "remote-a".to_string(),
+                shard_kind: "day".to_string(),
+                shard_date: Some("2026-06-05".to_string()),
+                content_hash,
+                github_path: layout.day_path("remote-a", "2026-06-05"),
+                imported_at: Some("2026-06-06T10:00:00+08:00".to_string()),
+            })
+            .await
+            .unwrap();
+        let stale_package = remote_day_package("remote-a", "2026-06-05", 100);
+        crate::github_sync::packages::import_github_sync_package(&repository, stale_package)
+            .await
+            .unwrap();
+        assert_eq!(
+            imported_token_sum(&repository, "device-remote-a", "2026-06-05").await,
+            100
+        );
+
+        let result =
+            force_reimport_remote_device_with_transport(&repository, &transport, "remote-a")
+                .await
+                .expect("force reimport succeeds");
+
+        assert_eq!(result.downloaded_shards, 1);
+        assert_eq!(result.imported, 1);
+        assert_eq!(
+            imported_token_sum(&repository, "device-remote-a", "2026-06-05").await,
+            300
+        );
+    }
+
+    #[tokio::test]
     async fn sync_records_remote_download_errors_for_status_ui() {
         let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
         repository.migrate().await.unwrap();
@@ -833,6 +1376,50 @@ mod tests {
             app_setting_value(&repository, "github_sync_last_message").await,
             Some(err)
         );
+    }
+
+    #[test]
+    fn github_sync_runtime_exposes_running_status_and_rejects_overlap() {
+        let runtime = GitHubSyncRuntime::default();
+
+        assert!(!runtime.status().running);
+        let guard = runtime
+            .try_start(SyncRunMode::Normal)
+            .expect("first sync can start");
+        let running_status = runtime.status();
+
+        assert!(running_status.running);
+        assert_eq!(running_status.mode.as_deref(), Some("normal"));
+        assert!(running_status.started_at.is_some());
+        assert!(runtime.try_start(SyncRunMode::ForceBootstrap).is_none());
+
+        runtime.update_phase("upload", "上传本机分片");
+        let phase_status = runtime.status();
+        assert_eq!(phase_status.phase.as_deref(), Some("upload"));
+        assert_eq!(phase_status.message.as_deref(), Some("上传本机分片"));
+
+        runtime.finish(&guard, "success", "GitHub 同步完成");
+        let finished_status = runtime.status();
+        assert!(!finished_status.running);
+        assert_eq!(finished_status.last_status.as_deref(), Some("success"));
+        assert_eq!(finished_status.message.as_deref(), Some("GitHub 同步完成"));
+    }
+
+    #[tokio::test]
+    async fn github_sync_runtime_returns_busy_when_another_sync_is_running() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        let runtime = GitHubSyncRuntime::default();
+        let _guard = runtime
+            .try_start(SyncRunMode::Normal)
+            .expect("first sync can start");
+
+        let result = run_once_with_runtime(&repository, &runtime, false)
+            .await
+            .expect("busy result is returned");
+
+        assert_eq!(result.status, "busy");
+        assert_eq!(result.message, "已有 GitHub 同步任务正在执行。");
     }
 
     #[test]

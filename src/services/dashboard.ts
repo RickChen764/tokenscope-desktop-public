@@ -7,6 +7,7 @@ import type {
   AgentSourceSummary,
   CallFilterOptions,
   CodexImportResult,
+  CodexUsageLimitSnapshot,
   DashboardRange,
   DashboardSummary,
   DataHealthIssueRow,
@@ -33,6 +34,7 @@ import type {
   GitHubSyncConnectionTestResult,
   GitHubSyncRemoteDevice,
   GitHubSyncRunResult,
+  GitHubSyncRuntimeStatus,
   GitHubSyncSettings,
   GitHubSyncSettingsInput,
 } from "../types/dashboard";
@@ -194,6 +196,24 @@ function defaultGitHubSyncSettings(): GitHubSyncSettings {
     last_status: null,
     last_message: null,
     last_error: null,
+  };
+}
+
+function defaultGitHubSyncRuntimeStatus(): GitHubSyncRuntimeStatus {
+  return {
+    running: false,
+    mode: null,
+    phase: null,
+    message: null,
+    started_at: null,
+    updated_at: null,
+    last_status: null,
+    current_step: 0,
+    total_steps: 0,
+    uploaded_shards: 0,
+    downloaded_shards: 0,
+    imported: 0,
+    skipped: 0,
   };
 }
 
@@ -419,10 +439,19 @@ export function getTokenPulse(historyDays = 30) {
   );
 }
 
-export function setTokenPulseDetailHovered(source: "mini" | "detail", hovered: boolean) {
+type TokenPulseDetailHoverSize = {
+  detailWidth?: number;
+  detailHeight?: number;
+};
+
+export function setTokenPulseDetailHovered(
+  source: "mini" | "detail",
+  hovered: boolean,
+  detailSize?: TokenPulseDetailHoverSize,
+) {
   return invokeOrFallback<void>(
     "set_token_pulse_detail_hovered",
-    { source, hovered },
+    { source, hovered, ...detailSize },
     undefined,
   );
 }
@@ -437,6 +466,14 @@ export function setTokenPulseDragging(dragging: boolean) {
 
 export function showTokenPulseContextMenu() {
   return invokeOrFallback<void>("show_token_pulse_context_menu", {}, undefined);
+}
+
+export function openTokenPulseHome() {
+  return invokeOrFallback<void>("open_token_pulse_home", {}, undefined);
+}
+
+export function hideTokenPulseWindow() {
+  return invokeOrFallback<void>("hide_token_pulse_window", {}, undefined);
 }
 
 export function getTokenPulsePositionLocked() {
@@ -628,6 +665,14 @@ export function getGitHubSyncSettings() {
   );
 }
 
+export function getGitHubSyncRuntimeStatus() {
+  return invokeOrFallback<GitHubSyncRuntimeStatus>(
+    "get_github_sync_runtime_status",
+    {},
+    defaultGitHubSyncRuntimeStatus(),
+  );
+}
+
 export function listGitHubSyncRemoteDevices() {
   return invokeOrFallback<GitHubSyncRemoteDevice[]>(
     "list_github_sync_remote_devices",
@@ -685,6 +730,23 @@ export function forceGitHubSyncBootstrapUpload() {
     {
       status: "browser-preview",
       message: tr("浏览器预览环境已跳过 GitHub bootstrap 重传。"),
+      uploaded_shards: 0,
+      downloaded_shards: 0,
+      imported: 0,
+      skipped: 0,
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+    },
+  );
+}
+
+export function forceReimportGitHubSyncRemoteDevice(deviceId: string) {
+  return invokeOrFallback<GitHubSyncRunResult>(
+    "force_reimport_github_sync_remote_device",
+    { deviceId },
+    {
+      status: "browser-preview",
+      message: tr("浏览器预览环境已跳过 GitHub 远端设备重新导入。"),
       uploaded_shards: 0,
       downloaded_shards: 0,
       imported: 0,
@@ -853,6 +915,12 @@ export async function importCodexThreads() {
   requireDesktopRuntime("导入 Codex 数据");
 
   return invoke<CodexImportResult>("import_codex_threads");
+}
+
+export async function getCodexUsageLimits() {
+  requireDesktopRuntime("读取 Codex 剩余用量");
+
+  return invoke<CodexUsageLimitSnapshot | null>("get_codex_usage_limits");
 }
 
 export async function importDetectedAgents(mode = "incremental" as AgentImportMode) {

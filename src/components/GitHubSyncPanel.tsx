@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 import {
   forceGitHubSyncBootstrapUpload,
+  forceReimportGitHubSyncRemoteDevice,
   getGitHubSyncSettings,
+  getGitHubSyncRuntimeStatus,
   listGitHubSyncRemoteDevices,
   runGitHubSyncOnce,
   saveGitHubSyncSettings,
@@ -10,6 +12,7 @@ import {
 } from "../services/dashboard";
 import type {
   GitHubSyncRemoteDevice,
+  GitHubSyncRuntimeStatus,
   GitHubSyncSettings,
   GitHubSyncSettingsInput,
 } from "../types/dashboard";
@@ -26,6 +29,7 @@ const defaultDraft: GitHubSyncSettingsInput = {
   sync_password: "",
 };
 const GITHUB_SYNC_STATUS_REFRESH_MS = 30_000;
+const GITHUB_SYNC_RUNTIME_REFRESH_MS = 1_000;
 
 interface GitHubSyncRefreshOptions {
   resetDraft?: boolean;
@@ -33,7 +37,26 @@ interface GitHubSyncRefreshOptions {
 }
 
 interface GitHubSyncPanelProps {
+  isAppUpdateBusy: boolean;
   onNotice: (notice: ToastNoticeValue) => void;
+}
+
+function emptyGitHubSyncRuntimeStatus(): GitHubSyncRuntimeStatus {
+  return {
+    running: false,
+    mode: null,
+    phase: null,
+    message: null,
+    started_at: null,
+    updated_at: null,
+    last_status: null,
+    current_step: 0,
+    total_steps: 0,
+    uploaded_shards: 0,
+    downloaded_shards: 0,
+    imported: 0,
+    skipped: 0,
+  };
 }
 
 function draftFromSettings(settings: GitHubSyncSettings): GitHubSyncSettingsInput {
@@ -48,7 +71,26 @@ function draftFromSettings(settings: GitHubSyncSettings): GitHubSyncSettingsInpu
   };
 }
 
-export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
+function formatElapsedSeconds(seconds: number) {
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = seconds % 60;
+  return `${minutes}m ${String(restSeconds).padStart(2, "0")}s`;
+}
+
+function noticeKindForRunStatus(status: string): ToastNoticeValue["kind"] {
+  if (status === "error") {
+    return "error";
+  }
+  if (status === "busy" || status === "disabled") {
+    return "warning";
+  }
+  return "success";
+}
+
+export function GitHubSyncPanel({ isAppUpdateBusy, onNotice }: GitHubSyncPanelProps) {
   const { language, t } = useI18n();
   const numberLocale = language === "zh-CN" ? "zh-CN" : "en-US";
   const [settings, setSettings] = useState<GitHubSyncSettings | null>(null);
@@ -56,6 +98,10 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
   const [draft, setDraft] = useState<GitHubSyncSettingsInput>(defaultDraft);
   const [isBusy, setIsBusy] = useState(false);
   const [isRemoteDevicesLoading, setIsRemoteDevicesLoading] = useState(true);
+  const [syncRuntimeStatus, setSyncRuntimeStatus] = useState<GitHubSyncRuntimeStatus>(() =>
+    emptyGitHubSyncRuntimeStatus(),
+  );
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const applyGitHubSyncSettings = useCallback(
     (nextSettings: GitHubSyncSettings, options: GitHubSyncRefreshOptions = {}) => {
@@ -111,13 +157,26 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
     [onNotice, t],
   );
 
+  const refreshGitHubSyncRuntimeStatus = useCallback(async () => {
+    try {
+      const nextStatus = await getGitHubSyncRuntimeStatus();
+      setSyncRuntimeStatus(nextStatus);
+      setNowMs(Date.now());
+      return nextStatus;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     void refreshGitHubSyncSettings({ resetDraft: true, showError: true });
     void refreshGitHubSyncRemoteDevices({ showError: true });
+    void refreshGitHubSyncRuntimeStatus();
 
     function refreshVisibleStatus() {
       void refreshGitHubSyncSettings({ resetDraft: false });
       void refreshGitHubSyncRemoteDevices();
+      void refreshGitHubSyncRuntimeStatus();
     }
 
     function handleVisibilityChange() {
@@ -130,15 +189,20 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
       refreshVisibleStatus,
       GITHUB_SYNC_STATUS_REFRESH_MS,
     );
+    const runtimeRefreshIntervalId = window.setInterval(
+      () => void refreshGitHubSyncRuntimeStatus(),
+      GITHUB_SYNC_RUNTIME_REFRESH_MS,
+    );
     window.addEventListener("focus", refreshVisibleStatus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.clearInterval(refreshIntervalId);
+      window.clearInterval(runtimeRefreshIntervalId);
       window.removeEventListener("focus", refreshVisibleStatus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [refreshGitHubSyncRemoteDevices, refreshGitHubSyncSettings]);
+  }, [refreshGitHubSyncRemoteDevices, refreshGitHubSyncRuntimeStatus, refreshGitHubSyncSettings]);
 
   function updateDraft<K extends keyof GitHubSyncSettingsInput>(
     key: K,
@@ -183,10 +247,12 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
     setIsBusy(true);
     try {
       const result = await runGitHubSyncOnce();
+      await refreshGitHubSyncRuntimeStatus();
       await refreshGitHubSyncSettings({ resetDraft: false });
       await refreshGitHubSyncRemoteDevices();
-      onNotice({ kind: result.status === "error" ? "error" : "success", message: result.message });
+      onNotice({ kind: noticeKindForRunStatus(result.status), message: result.message });
     } catch (err) {
+      await refreshGitHubSyncRuntimeStatus();
       await refreshGitHubSyncSettings({ resetDraft: false });
       await refreshGitHubSyncRemoteDevices();
       onNotice({
@@ -204,15 +270,50 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
     setIsBusy(true);
     try {
       const result = await forceGitHubSyncBootstrapUpload();
+      await refreshGitHubSyncRuntimeStatus();
       await refreshGitHubSyncSettings({ resetDraft: false });
       await refreshGitHubSyncRemoteDevices();
-      onNotice({ kind: result.status === "error" ? "error" : "success", message: result.message });
+      onNotice({ kind: noticeKindForRunStatus(result.status), message: result.message });
     } catch (err) {
+      await refreshGitHubSyncRuntimeStatus();
       await refreshGitHubSyncSettings({ resetDraft: false });
       await refreshGitHubSyncRemoteDevices();
       onNotice({
         kind: "error",
         message: t("强制重新上传 bootstrap 失败：{error}", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleForceRemoteReimport(device: GitHubSyncRemoteDevice) {
+    const deviceName = device.device_name || device.device_id;
+    const confirmed = window.confirm(
+      t("将重新下载并导入远端设备 {device} 的全部分片。本操作不会修改 GitHub 仓库，但会覆盖本机已导入的该远端设备数据。是否继续？", {
+        device: deviceName,
+      }),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const result = await forceReimportGitHubSyncRemoteDevice(device.device_id);
+      await refreshGitHubSyncRuntimeStatus();
+      await refreshGitHubSyncSettings({ resetDraft: false });
+      await refreshGitHubSyncRemoteDevices();
+      onNotice({ kind: noticeKindForRunStatus(result.status), message: result.message });
+    } catch (err) {
+      await refreshGitHubSyncRuntimeStatus();
+      await refreshGitHubSyncSettings({ resetDraft: false });
+      await refreshGitHubSyncRemoteDevices();
+      onNotice({
+        kind: "error",
+        message: t("GitHub 远端设备重新导入失败：{error}", {
           error: err instanceof Error ? err.message : String(err),
         }),
       });
@@ -235,13 +336,14 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
       }
 
       const syncResult = await forceGitHubSyncBootstrapUpload();
+      await refreshGitHubSyncRuntimeStatus();
       const refreshedSettings = await refreshGitHubSyncSettings({ resetDraft: true });
       if (!refreshedSettings) {
         throw new Error(t("读取 GitHub 同步状态失败。"));
       }
       await refreshGitHubSyncRemoteDevices();
       onNotice({
-        kind: syncResult.status === "error" ? "error" : "success",
+        kind: noticeKindForRunStatus(syncResult.status),
         message: syncResult.message,
       });
     } catch (err) {
@@ -263,6 +365,26 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
     ? formatDateTime(settings.last_import_at)
     : t("尚未同步");
   const lastMessageLabel = settings?.last_message || t("尚未执行");
+  const syncStartedMs = syncRuntimeStatus.started_at
+    ? Date.parse(syncRuntimeStatus.started_at)
+    : Number.NaN;
+  const syncElapsedSeconds =
+    syncRuntimeStatus.running && Number.isFinite(syncStartedMs)
+      ? Math.max(0, Math.floor((nowMs - syncStartedMs) / 1000))
+      : 0;
+  const syncProgressPercent =
+    syncRuntimeStatus.total_steps > 0
+      ? Math.min(
+          100,
+          Math.round((syncRuntimeStatus.current_step / syncRuntimeStatus.total_steps) * 100),
+        )
+      : null;
+  const actionsDisabled = isBusy || syncRuntimeStatus.running || isAppUpdateBusy;
+  const liveStatusMessage = syncRuntimeStatus.running
+    ? syncRuntimeStatus.message || t("GitHub 同步正在执行...")
+    : isAppUpdateBusy
+      ? t("应用更新正在处理，GitHub 同步操作已暂时锁定。")
+      : "";
 
   return (
     <section className="panel github-sync-panel">
@@ -279,7 +401,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
           <span>{t("启用")}</span>
           <input
             checked={draft.enabled}
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("enabled", event.target.checked)}
             role="switch"
             type="checkbox"
@@ -304,7 +426,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         </ol>
         <button
           className="primary"
-          disabled={isBusy}
+          disabled={actionsDisabled}
           onClick={() => void handleInitializeRepository()}
           type="button"
         >
@@ -316,7 +438,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         <label className="field">
           <span>owner</span>
           <input
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("owner", event.target.value)}
             value={draft.owner}
           />
@@ -324,7 +446,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         <label className="field">
           <span>repo</span>
           <input
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("repo", event.target.value)}
             value={draft.repo}
           />
@@ -332,7 +454,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         <label className="field">
           <span>branch</span>
           <input
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("branch", event.target.value)}
             value={draft.branch}
           />
@@ -340,7 +462,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         <label className="field">
           <span>path prefix</span>
           <input
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("path_prefix", event.target.value)}
             value={draft.path_prefix}
           />
@@ -348,7 +470,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         <label className="field">
           <span>personal access token</span>
           <input
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("token", event.target.value)}
             placeholder={settings?.token_redacted ?? t("未配置")}
             type="password"
@@ -358,7 +480,7 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         <label className="field">
           <span>{t("同步密码")}</span>
           <input
-            disabled={isBusy}
+            disabled={actionsDisabled}
             onChange={(event) => updateDraft("sync_password", event.target.value)}
             placeholder={settings?.sync_password_configured ? t("已配置") : t("未配置")}
             type="password"
@@ -394,10 +516,48 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
         </div>
       </div>
 
+      {syncRuntimeStatus.running || isAppUpdateBusy ? (
+        <div className="github-sync-live-status" role="status" aria-live="polite">
+          <div className="sync-live-meta">
+            <span>{syncRuntimeStatus.running ? t("GitHub 同步中") : t("同步已锁定")}</span>
+            <strong>{liveStatusMessage}</strong>
+            {syncRuntimeStatus.running ? (
+              <small>
+                {t("已耗时 {elapsed}", {
+                  elapsed: formatElapsedSeconds(syncElapsedSeconds),
+                })}
+              </small>
+            ) : null}
+          </div>
+          <div
+            className="sync-progress-bar"
+            aria-label={t("GitHub 同步进度")}
+            aria-valuemax={syncRuntimeStatus.total_steps > 0 ? syncRuntimeStatus.total_steps : undefined}
+            aria-valuenow={syncRuntimeStatus.total_steps > 0 ? syncRuntimeStatus.current_step : undefined}
+            role="progressbar"
+          >
+            <span
+              className={syncProgressPercent === null ? "indeterminate" : undefined}
+              style={syncProgressPercent === null ? undefined : { width: `${syncProgressPercent}%` }}
+            />
+          </div>
+          {syncRuntimeStatus.running ? (
+            <div className="sync-live-counts">
+              <span>{t("上传 {count} 个分片", { count: syncRuntimeStatus.uploaded_shards })}</span>
+              <span>{t("下载 {count} 个分片", { count: syncRuntimeStatus.downloaded_shards })}</span>
+              <span>{t("导入 {count} 条记录", { count: syncRuntimeStatus.imported })}</span>
+              <span>{t("跳过 {count} 条记录", { count: syncRuntimeStatus.skipped })}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <GitHubSyncRemoteDeviceList
+        actionsDisabled={actionsDisabled}
         devices={remoteDevices}
         isLoading={isRemoteDevicesLoading}
         numberLocale={numberLocale}
+        onForceReimport={handleForceRemoteReimport}
       />
 
       <p className="settings-footnote">
@@ -405,16 +565,16 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
       </p>
 
       <div className="form-actions">
-        <button className="primary secondary" disabled={isBusy} onClick={() => void handleTestConnection()} type="button">
+        <button className="primary secondary" disabled={actionsDisabled} onClick={() => void handleTestConnection()} type="button">
           {t("测试连接")}
         </button>
-        <button className="primary secondary" disabled={isBusy} onClick={() => void handleForceBootstrap()} type="button">
+        <button className="primary secondary" disabled={actionsDisabled} onClick={() => void handleForceBootstrap()} type="button">
           {t("强制重新上传 bootstrap")}
         </button>
-        <button className="primary secondary" disabled={isBusy} onClick={() => void handleRunSync()} type="button">
-          {t("立即同步")}
+        <button className="primary secondary" disabled={actionsDisabled} onClick={() => void handleRunSync()} type="button">
+          {syncRuntimeStatus.running ? t("同步中...") : t("立即同步")}
         </button>
-        <button className="primary" disabled={isBusy} onClick={() => void handleSave()} type="button">
+        <button className="primary" disabled={actionsDisabled} onClick={() => void handleSave()} type="button">
           {t("保存 GitHub 同步设置")}
         </button>
       </div>
@@ -423,13 +583,17 @@ export function GitHubSyncPanel({ onNotice }: GitHubSyncPanelProps) {
 }
 
 function GitHubSyncRemoteDeviceList({
+  actionsDisabled,
   devices,
   isLoading,
   numberLocale,
+  onForceReimport,
 }: {
+  actionsDisabled: boolean;
   devices: GitHubSyncRemoteDevice[];
   isLoading: boolean;
   numberLocale: string;
+  onForceReimport: (device: GitHubSyncRemoteDevice) => void;
 }) {
   const { t } = useI18n();
 
@@ -456,6 +620,7 @@ function GitHubSyncRemoteDeviceList({
             <span role="columnheader">{t("最后导入")}</span>
             <span role="columnheader">{t("调用数")}</span>
             <span role="columnheader">Token</span>
+            <span role="columnheader">{t("操作")}</span>
           </div>
           {devices.map((device) => (
             <div className="github-remote-device-row" key={device.device_id} role="row">
@@ -468,6 +633,16 @@ function GitHubSyncRemoteDeviceList({
               <span role="cell">{formatDateTime(device.last_import_at, t("无"))}</span>
               <span role="cell">{formatInteger(device.calls, numberLocale)}</span>
               <span role="cell">{formatInteger(device.total_tokens, numberLocale)}</span>
+              <span className="remote-device-actions" role="cell">
+                <button
+                  className="primary secondary"
+                  disabled={actionsDisabled}
+                  onClick={() => onForceReimport(device)}
+                  type="button"
+                >
+                  {t("重新导入")}
+                </button>
+              </span>
             </div>
           ))}
         </div>
