@@ -8,7 +8,7 @@ use sqlx::query_as;
 
 use crate::db::{
     DevicePackageImportResult, ExternalDatasetImportCall, ExternalDatasetInput, NewLlmCall,
-    TokenScopeRepository,
+    TokenScopeRepository, GITHUB_SYNC_DATA_MODE_DETAIL_V2,
 };
 
 const PACKAGE_TYPE: &str = "tokenscope.device_dataset";
@@ -181,6 +181,7 @@ pub async fn import_device_dataset_package(
         total_tokens,
         estimated_cost_usd,
         cost_currency,
+        sync_data_mode: GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string(),
     };
     let dataset = repository
         .replace_external_dataset(&input, &import_calls)

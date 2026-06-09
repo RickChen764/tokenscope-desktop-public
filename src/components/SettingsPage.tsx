@@ -6,6 +6,7 @@ import { GitHubSyncPanel } from "./GitHubSyncPanel";
 import { ToastNotice, type ToastNoticeValue } from "./ToastNotice";
 import {
   checkForAppUpdate,
+  clearDemoData,
   detectLocalAgents,
   exportCallsCsv,
   getStoredAppUpdateInfo,
@@ -16,6 +17,7 @@ import {
   runBackgroundSyncOnce,
   saveSyncSettings,
 } from "../services/dashboard";
+import { appUpdateVersionRange } from "../services/appUpdateState";
 import { useI18n, type AppLanguage } from "../i18n";
 import { useDisplayPreference, type NumberDisplayMode } from "../preferences/display";
 import type {
@@ -60,7 +62,6 @@ interface SettingsPageProps {
   isSeedLoading: boolean;
   isSyncing: boolean;
   onSeedDemoData: () => Promise<void>;
-  onSyncLocalData: () => Promise<void>;
 }
 
 export function SettingsPage({
@@ -220,9 +221,13 @@ export function SettingsPage({
         });
         return;
       }
+      const clearedDemoRows = await clearDemoData();
+      const cleanupText =
+        clearedDemoRows > 0 ? t("，清理演示数据 {count} 条", { count: clearedDemoRows }) : "";
       setNotice({
         kind: "success",
-        message: t("同步完成：写入 {imported} 条，跳过 {skipped} 条。", {
+        message: t("同步完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。", {
+          cleanupText,
           imported,
           skipped,
         }),
@@ -283,9 +288,13 @@ export function SettingsPage({
         });
         return;
       }
+      const clearedDemoRows = await clearDemoData();
+      const cleanupText =
+        clearedDemoRows > 0 ? t("，清理演示数据 {count} 条", { count: clearedDemoRows }) : "";
       setNotice({
         kind: "success",
-        message: t("全量刷新完成：写入 {imported} 条，跳过 {skipped} 条。", {
+        message: t("全量刷新完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。", {
+          cleanupText,
           imported,
           skipped,
         }),
@@ -315,7 +324,7 @@ export function SettingsPage({
       if (requestId === syncSaveRequestRef.current) {
         setNotice({
           kind: "error",
-          message: t("淇濆瓨鍚庡彴鑷姩鍚屾璁剧疆澶辫触锛歿error}", {
+          message: t("保存后台自动同步设置失败：{error}", {
             error: err instanceof Error ? err.message : String(err),
           }),
         });
@@ -386,11 +395,15 @@ export function SettingsPage({
     try {
       const nextUpdateInfo = await checkForAppUpdate();
       setUpdateInfo(nextUpdateInfo);
+      const updateVersionLabel =
+        appUpdateVersionRange(nextUpdateInfo.current_version, nextUpdateInfo.version) ??
+        nextUpdateInfo.version ??
+        "";
       setNotice({
         kind: "success",
         message: nextUpdateInfo.available
           ? t("发现新版本 {version}，可以下载并安装。", {
-              version: nextUpdateInfo.version ?? "",
+              version: updateVersionLabel,
             })
           : t("当前已经是最新版本。"),
       });
@@ -493,8 +506,12 @@ export function SettingsPage({
     t("\u5c1a\u672a\u68c0\u67e5"),
   );
   const updateCurrentVersionLabel = updateInfo.current_version || t("\u672a\u77e5");
+  const updateAvailableVersionValue = appUpdateVersionRange(
+    updateInfo.current_version,
+    updateInfo.version,
+  );
   const updateAvailableVersionLabel =
-    updateInfo.version ||
+    updateAvailableVersionValue ||
     (updateInfo.status === "current" ? t("\u5df2\u662f\u6700\u65b0\u7248\u672c") : t("\u65e0"));
   const updateProgressBytesLabel = updateProgress.content_length
     ? `${formatBytes(updateProgress.downloaded_bytes, language)} / ${formatBytes(
@@ -1095,7 +1112,7 @@ export function SettingsPage({
           <section className="panel settings-utility settings-action-strip">
             <div>
               <h2>{t("数据维护")}</h2>
-              <p>{t("执行低频维护动作：生成演示数据、全量刷新本机来源或导出 CSV。")}</p>
+              <p>{t("全量刷新会跳过增量游标重新扫描本机来源；不会删除源端已不存在的历史记录。")}</p>
             </div>
             <div className="utility-actions">
               <button

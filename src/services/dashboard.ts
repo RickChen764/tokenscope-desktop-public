@@ -1,8 +1,10 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { translateRuntime as tr } from "../i18n";
 import {
+  createAppUpdateInfo,
   defaultAppUpdateInfo,
   normalizeAppUpdateInfo,
   recoverStoredAppUpdateInfo,
@@ -192,6 +194,7 @@ function defaultGitHubSyncSettings(): GitHubSyncSettings {
     repo: "",
     branch: "main",
     path_prefix: "tokenscope-sync",
+    data_mode: "aggregate_v3",
     token_configured: false,
     token_redacted: null,
     sync_password_configured: false,
@@ -358,6 +361,18 @@ function requireDesktopRuntime(action: string) {
         action: tr(action),
       }),
     );
+  }
+}
+
+async function readCurrentAppVersion() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  try {
+    return await getVersion();
+  } catch {
+    return null;
   }
 }
 
@@ -735,19 +750,6 @@ export function forceReimportGitHubSyncRemoteDevice(deviceId: string) {
   );
 }
 
-function toAppUpdateInfo(update: Update | null): AppUpdateInfo {
-  return {
-    available: update !== null,
-    current_version: update?.currentVersion ?? null,
-    version: update?.version ?? null,
-    date: update?.date ?? null,
-    body: update?.body ?? null,
-    status: update ? "available" : "current",
-    checked_at: new Date().toISOString(),
-    error: null,
-  };
-}
-
 async function runAppUpdateCheck() {
   if (!isDesktopRuntime()) {
     return writeStoredAppUpdateInfo({
@@ -762,13 +764,17 @@ async function runAppUpdateCheck() {
     });
   }
 
+  const currentVersionPromise = readCurrentAppVersion();
   try {
-    pendingAppUpdate = await check();
-    return writeStoredAppUpdateInfo(toAppUpdateInfo(pendingAppUpdate));
+    const [nextUpdate, currentVersion] = await Promise.all([check(), currentVersionPromise]);
+    pendingAppUpdate = nextUpdate;
+    return writeStoredAppUpdateInfo(createAppUpdateInfo(pendingAppUpdate, currentVersion));
   } catch (err) {
     pendingAppUpdate = null;
+    const currentVersion = await currentVersionPromise;
     writeStoredAppUpdateInfo({
       available: false,
+      current_version: currentVersion,
       status: "error",
       checked_at: new Date().toISOString(),
       error: stringifyError(err),
@@ -796,10 +802,12 @@ export async function installPendingAppUpdate(
   requireDesktopRuntime("安装应用更新");
 
   if (!pendingAppUpdate) {
+    const currentVersion = await readCurrentAppVersion();
     try {
       pendingAppUpdate = await check();
     } catch (err) {
       writeStoredAppUpdateInfo({
+        current_version: currentVersion,
         status: "error",
         checked_at: new Date().toISOString(),
         error: stringifyError(err),
@@ -809,12 +817,8 @@ export async function installPendingAppUpdate(
   }
 
   if (!pendingAppUpdate) {
-    writeStoredAppUpdateInfo({
-      available: false,
-      status: "current",
-      checked_at: new Date().toISOString(),
-      error: null,
-    });
+    const currentVersion = await readCurrentAppVersion();
+    writeStoredAppUpdateInfo(createAppUpdateInfo(null, currentVersion));
     throw new Error(tr("没有可安装的待处理更新，请先检查更新。"));
   }
 

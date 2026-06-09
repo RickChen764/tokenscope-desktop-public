@@ -13,14 +13,28 @@ pub struct BackgroundSyncRuntime {
     running: Arc<AtomicBool>,
 }
 
+pub struct BackgroundSyncRunGuard {
+    running: Arc<AtomicBool>,
+}
+
 impl BackgroundSyncRuntime {
-    fn try_start(&self) -> bool {
-        self.running
+    pub fn try_start(&self) -> Option<BackgroundSyncRunGuard> {
+        if self
+            .running
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
+        {
+            Some(BackgroundSyncRunGuard {
+                running: Arc::clone(&self.running),
+            })
+        } else {
+            None
+        }
     }
+}
 
-    fn finish(&self) {
+impl Drop for BackgroundSyncRunGuard {
+    fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
     }
 }
@@ -32,7 +46,7 @@ pub async fn run_once(
 ) -> Result<SyncRunResult, String> {
     let total_started = Instant::now();
     let now = Local::now().to_rfc3339();
-    if !runtime.try_start() {
+    let Some(_guard) = runtime.try_start() else {
         eprintln!("[tokenscope][perf] background_sync.total elapsed_ms=0 status=busy");
         return Ok(SyncRunResult {
             status: "busy".to_string(),
@@ -42,7 +56,7 @@ pub async fn run_once(
             started_at: now.clone(),
             finished_at: now,
         });
-    }
+    };
 
     let started_at = Local::now().to_rfc3339();
     let import_started = Instant::now();
@@ -103,7 +117,6 @@ pub async fn run_once(
             ),
         }
     }
-    runtime.finish();
     eprintln!(
         "[tokenscope][perf] background_sync.total elapsed_ms={} status={} imported={} skipped={}",
         total_started.elapsed().as_millis(),

@@ -85,12 +85,15 @@ export interface SyncSettings extends SyncSettingsInput {
   last_error: string | null;
 }
 
+export type GitHubSyncDataMode = "aggregate_v3" | "detail_v2";
+
 export interface GitHubSyncSettingsInput {
   enabled: boolean;
   owner: string;
   repo: string;
   branch: string;
   path_prefix: string;
+  data_mode: GitHubSyncDataMode;
   token?: string | null;
   sync_password?: string | null;
 }
@@ -116,6 +119,7 @@ export interface GitHubSyncRemoteDevice {
   last_import_at: string | null;
   calls: number;
   total_tokens: number;
+  sync_data_mode: GitHubSyncDataMode | null;
 }
 
 export interface GitHubSyncConnectionTestResult {

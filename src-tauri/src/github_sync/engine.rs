@@ -6,15 +6,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{
     GitHubSyncConnectionTestResult, GitHubSyncRunResult, GitHubSyncSettings,
-    GitHubSyncShardStateInput, TokenScopeRepository,
+    GitHubSyncShardStateInput, TokenScopeRepository, GITHUB_SYNC_DATA_MODE_AGGREGATE_V3,
+    GITHUB_SYNC_DATA_MODE_DETAIL_V2,
 };
 use crate::github_sync::crypto::{
-    content_hash_hex, decrypt_sync_payload, encrypt_sync_payload, SyncEncryptedEnvelope,
+    content_hash_hex, decrypt_sync_payload_bytes, encrypt_sync_payload_bytes,
 };
 use crate::github_sync::github::{GitHubContentFile, GitHubContentsClient, GitHubSyncLayout};
 use crate::github_sync::packages::{
-    export_github_sync_package, import_github_sync_package, GitHubSyncPackage,
-    GitHubSyncShardSelector,
+    decode_github_sync_package, export_github_sync_aggregate_package, export_github_sync_package,
+    import_github_sync_package, serialize_github_sync_package, GitHubSyncAggregatePackage,
+    GitHubSyncCompactPackage, GitHubSyncShardSelector,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -507,13 +509,20 @@ async fn run_with_settings<T: GitHubSyncTransport>(
     if let Some(runtime) = runtime {
         runtime.update_phase("export", "导出本机 GitHub 同步分片");
     }
-    let bootstrap_package =
-        export_github_sync_package(repository, GitHubSyncShardSelector::Bootstrap).await?;
-    let local_dates = bootstrap_package
-        .calls
-        .iter()
-        .map(|call| call.date_local.clone())
-        .collect::<BTreeSet<_>>();
+    let bootstrap_package = export_local_github_sync_package(
+        repository,
+        GitHubSyncShardSelector::Bootstrap,
+        &settings.data_mode,
+    )
+    .await?;
+    let mut local_dates = bootstrap_package.date_locals();
+    for uploaded_date in repository
+        .github_sync_uploaded_day_dates(&device_id)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        local_dates.insert(uploaded_date);
+    }
 
     let mut uploaded_shards = 0;
     let should_upload_bootstrap =
@@ -560,9 +569,12 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                     total_dates,
                 );
             }
-            let package =
-                export_github_sync_package(repository, GitHubSyncShardSelector::Day(date.clone()))
-                    .await?;
+            let package = export_local_github_sync_package(
+                repository,
+                GitHubSyncShardSelector::Day(date.clone()),
+                &settings.data_mode,
+            )
+            .await?;
             let plaintext = package_bytes(&package)?;
             let hash = package_content_hash(&package)?;
             let existing = repository
@@ -616,7 +628,14 @@ async fn run_with_settings<T: GitHubSyncTransport>(
         if let Some(runtime) = runtime {
             runtime.update_phase("manifest", "上传本机设备清单");
         }
-        upload_manifest(transport, &layout, &device_id, &sync_password).await?;
+        upload_manifest(
+            transport,
+            &layout,
+            &device_id,
+            &sync_password,
+            &settings.data_mode,
+        )
+        .await?;
     }
     if let Some(runtime) = runtime {
         runtime.update_phase("download", "读取远端设备分片");
@@ -702,6 +721,12 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
             );
         }
 
+        let remote_data_mode =
+            remote_manifest_data_mode(transport, layout, &remote_device_id, sync_password).await?;
+        repository
+            .update_external_dataset_sync_data_mode_for_device(&remote_device_id, &remote_data_mode)
+            .await
+            .map_err(|err| err.to_string())?;
         let bootstrap_path = layout.bootstrap_path(&remote_device_id);
         import_remote_shard(
             repository,
@@ -710,6 +735,7 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
             None,
             sync_password,
             false,
+            Some(remote_data_mode.as_str()),
             &mut summary,
         )
         .await?;
@@ -750,6 +776,7 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
                 }),
                 sync_password,
                 false,
+                Some(remote_data_mode.as_str()),
                 &mut summary,
             )
             .await?;
@@ -774,6 +801,12 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
     summary: &mut GitHubSyncDownloadSummary,
 ) -> Result<(), String> {
     let bootstrap_path = layout.bootstrap_path(remote_device_id);
+    let remote_data_mode =
+        remote_manifest_data_mode(transport, layout, remote_device_id, sync_password).await?;
+    repository
+        .update_external_dataset_sync_data_mode_for_device(remote_device_id, &remote_data_mode)
+        .await
+        .map_err(|err| err.to_string())?;
     import_remote_shard(
         repository,
         transport,
@@ -781,6 +814,7 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
         None,
         sync_password,
         force_reimport,
+        Some(remote_data_mode.as_str()),
         summary,
     )
     .await?;
@@ -821,6 +855,7 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
             }),
             sync_password,
             force_reimport,
+            Some(remote_data_mode.as_str()),
             summary,
         )
         .await?;
@@ -839,6 +874,7 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
     shard_hint: Option<RemoteShardHint<'_>>,
     sync_password: &str,
     force_reimport: bool,
+    expected_data_mode: Option<&str>,
     summary: &mut GitHubSyncDownloadSummary,
 ) -> Result<(), String> {
     if !force_reimport {
@@ -860,15 +896,19 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
     let Some(file) = transport.get_file(path).await? else {
         return Ok(());
     };
-    let envelope = serde_json::from_slice::<SyncEncryptedEnvelope>(&file.content)
-        .map_err(|err| format!("GitHub 同步分片加密信封解析失败：{err}"))?;
-    let plaintext = decrypt_sync_payload(&envelope, sync_password)?;
+    let plaintext = decrypt_sync_payload_bytes(&file.content, sync_password)?;
     let content_hash = content_hash_hex(&plaintext);
-    let package = serde_json::from_slice::<GitHubSyncPackage>(&plaintext)
-        .map_err(|err| format!("GitHub 同步分片解析失败：{err}"))?;
-    let remote_device_id = package.device.id.clone();
-    let shard_kind = package.shard.kind.clone();
-    let shard_date = package.shard.date.clone();
+    let package = decode_github_sync_package(&plaintext)?;
+    if expected_data_mode
+        .map(|mode| package.data_mode() != mode)
+        .unwrap_or(false)
+    {
+        summary.skipped += 1;
+        return Ok(());
+    }
+    let remote_device_id = package.device_id().to_string();
+    let shard_kind = package.shard_kind().to_string();
+    let shard_date = package.shard_date().map(ToString::to_string);
 
     if !force_reimport
         && repository
@@ -920,7 +960,7 @@ fn parse_day_file_date(name: &str) -> Option<String> {
 async fn upload_package<T: GitHubSyncTransport>(
     transport: &T,
     path: &str,
-    package: &GitHubSyncPackage,
+    package: &GitHubSyncLocalPackage,
     sync_password: &str,
     message: &str,
 ) -> Result<GitHubContentFile, String> {
@@ -933,11 +973,13 @@ async fn upload_manifest<T: GitHubSyncTransport>(
     layout: &GitHubSyncLayout,
     device_id: &str,
     sync_password: &str,
+    data_mode: &str,
 ) -> Result<(), String> {
     let manifest = GitHubSyncManifest {
         version: 1,
         device_id: device_id.to_string(),
         updated_at: Local::now().to_rfc3339(),
+        active_data_mode: normalize_github_sync_data_mode(data_mode).to_string(),
     };
     let plaintext = serde_json::to_vec(&manifest)
         .map_err(|err| format!("GitHub manifest 序列化失败：{err}"))?;
@@ -959,21 +1001,56 @@ async fn upload_plaintext<T: GitHubSyncTransport>(
     sync_password: &str,
     message: &str,
 ) -> Result<GitHubContentFile, String> {
-    let envelope = encrypt_sync_payload(plaintext, sync_password)?;
-    let encrypted =
-        serde_json::to_vec(&envelope).map_err(|err| format!("GitHub 加密信封序列化失败：{err}"))?;
+    let encrypted = encrypt_sync_payload_bytes(plaintext, sync_password)?;
     let sha = transport.get_file(path).await?.map(|file| file.sha);
     transport.put_file(path, encrypted, sha, message).await
 }
 
-fn package_bytes(package: &GitHubSyncPackage) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(package).map_err(|err| format!("GitHub 同步分片序列化失败：{err}"))
+async fn remote_manifest_data_mode<T: GitHubSyncTransport>(
+    transport: &T,
+    layout: &GitHubSyncLayout,
+    device_id: &str,
+    sync_password: &str,
+) -> Result<String, String> {
+    let Some(file) = transport.get_file(&layout.manifest_path(device_id)).await? else {
+        return Ok(GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string());
+    };
+    let plaintext = decrypt_sync_payload_bytes(&file.content, sync_password)?;
+    let manifest = serde_json::from_slice::<GitHubSyncManifest>(&plaintext)
+        .map_err(|err| format!("GitHub manifest 解析失败：{err}"))?;
+    Ok(normalize_github_sync_data_mode(&manifest.active_data_mode).to_string())
 }
 
-fn package_content_hash(package: &GitHubSyncPackage) -> Result<String, String> {
-    let mut stable_package = package.clone();
-    stable_package.exported_at.clear();
+async fn export_local_github_sync_package(
+    repository: &TokenScopeRepository,
+    selector: GitHubSyncShardSelector,
+    data_mode: &str,
+) -> Result<GitHubSyncLocalPackage, String> {
+    match normalize_github_sync_data_mode(data_mode) {
+        GITHUB_SYNC_DATA_MODE_DETAIL_V2 => export_github_sync_package(repository, selector)
+            .await
+            .map(GitHubSyncLocalPackage::Compact),
+        _ => export_github_sync_aggregate_package(repository, selector)
+            .await
+            .map(GitHubSyncLocalPackage::Aggregate),
+    }
+}
+
+fn package_bytes<T: Serialize>(package: &T) -> Result<Vec<u8>, String> {
+    serialize_github_sync_package(package)
+}
+
+fn package_content_hash(package: &GitHubSyncLocalPackage) -> Result<String, String> {
+    let stable_package = package.stable_for_hash();
     package_bytes(&stable_package).map(|bytes| content_hash_hex(&bytes))
+}
+
+fn normalize_github_sync_data_mode(value: &str) -> &str {
+    match value.trim() {
+        GITHUB_SYNC_DATA_MODE_DETAIL_V2 => GITHUB_SYNC_DATA_MODE_DETAIL_V2,
+        GITHUB_SYNC_DATA_MODE_AGGREGATE_V3 => GITHUB_SYNC_DATA_MODE_AGGREGATE_V3,
+        _ => GITHUB_SYNC_DATA_MODE_AGGREGATE_V3,
+    }
 }
 
 async fn record_error_result(
@@ -1026,11 +1103,48 @@ fn disabled_result_with_started_at(started_at: String) -> GitHubSyncRunResult {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct GitHubSyncManifest {
     version: i64,
     device_id: String,
     updated_at: String,
+    #[serde(default = "default_manifest_data_mode")]
+    active_data_mode: String,
+}
+
+fn default_manifest_data_mode() -> String {
+    GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string()
+}
+
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+enum GitHubSyncLocalPackage {
+    Compact(GitHubSyncCompactPackage),
+    Aggregate(GitHubSyncAggregatePackage),
+}
+
+impl GitHubSyncLocalPackage {
+    fn date_locals(&self) -> BTreeSet<String> {
+        match self {
+            Self::Compact(package) => package
+                .rows
+                .iter()
+                .map(|call| call.date_local().to_string())
+                .collect(),
+            Self::Aggregate(package) => {
+                package.daily_rows.iter().map(|row| row.0.clone()).collect()
+            }
+        }
+    }
+
+    fn stable_for_hash(&self) -> Self {
+        let mut stable_package = self.clone();
+        match &mut stable_package {
+            Self::Compact(package) => package.exported_at.clear(),
+            Self::Aggregate(package) => package.exported_at.clear(),
+        }
+        stable_package
+    }
 }
 
 struct RemoteShardHint<'a> {
@@ -1184,7 +1298,7 @@ mod tests {
     use super::*;
     use crate::db::{GitHubSyncSettingsInput, TokenScopeRepository};
     use crate::github_sync::crypto::encrypt_sync_payload;
-    use crate::github_sync::packages::{GitHubSyncDevice, GitHubSyncShard};
+    use crate::github_sync::packages::{GitHubSyncDevice, GitHubSyncPackage, GitHubSyncShard};
 
     #[tokio::test]
     async fn first_sync_uploads_bootstrap_then_manifest() {
@@ -1209,6 +1323,30 @@ mod tests {
         assert!(transport
             .uploaded_path("tokenscope-sync/v1/devices/")
             .contains("manifest.enc"));
+    }
+
+    #[tokio::test]
+    async fn sync_uploads_binary_encrypted_envelopes() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        insert_test_call(&repository, "local-a", "2026-06-05", 100).await;
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+
+        let transport = FakeGitHubTransport::default();
+        run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+            .await
+            .expect("sync succeeds");
+        let uploaded = transport.uploaded.lock().expect("fake transport lock");
+        let bootstrap = uploaded
+            .iter()
+            .find(|file| file.path.contains("bootstrap.tokenscope.zst.enc"))
+            .expect("bootstrap uploaded");
+
+        assert!(bootstrap.content.starts_with(b"TSGS2"));
+        assert!(!bootstrap.content.starts_with(b"{"));
     }
 
     #[tokio::test]
@@ -1278,6 +1416,40 @@ mod tests {
             app_setting_value(&repository, "github_sync_last_upload_at").await,
             first_upload_at
         );
+    }
+
+    #[tokio::test]
+    async fn sync_uploads_empty_day_shard_when_previously_uploaded_date_is_cleared() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        insert_test_call(&repository, "local-a", "2026-06-05", 100).await;
+
+        let transport = FakeGitHubTransport::default();
+        run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+            .await
+            .expect("first sync succeeds");
+        query("DELETE FROM llm_call WHERE id = 'local-a'")
+            .execute(repository.pool())
+            .await
+            .expect("test call deleted");
+
+        let result =
+            run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+                .await
+                .expect("second sync succeeds");
+
+        assert_eq!(result.uploaded_shards, 1);
+        assert!(transport
+            .uploaded_path("days/2026-06-05.tokenscope.zst.enc")
+            .contains("2026-06-05"));
     }
 
     #[tokio::test]
@@ -1526,6 +1698,7 @@ mod tests {
             repo: "tokenscope-sync".to_string(),
             branch: "main".to_string(),
             path_prefix: "tokenscope-sync".to_string(),
+            data_mode: None,
             token: Some("ghp_test_token".to_string()),
             sync_password: Some("sync-password".to_string()),
         }

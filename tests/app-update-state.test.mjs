@@ -68,3 +68,32 @@ test("app update state recovers stale transient updater state after relaunch", a
   assert.equal(available.available, true);
   assert.equal(available.version, "0.1.13");
 });
+
+test("app update state keeps local version when updater returns no update", async () => {
+  const { createAppUpdateInfo } = await importTranspiledTs("src/services/appUpdateState.ts");
+
+  const info = createAppUpdateInfo(null, "0.1.14", "2026-06-09T03:06:59.000Z");
+
+  assert.equal(info.status, "current");
+  assert.equal(info.available, false);
+  assert.equal(info.current_version, "0.1.14");
+  assert.equal(info.version, null);
+  assert.equal(info.checked_at, "2026-06-09T03:06:59.000Z");
+});
+
+test("app update version range shows multi-version update target", async () => {
+  const { createAppUpdateInfo, appUpdateVersionRange } = await importTranspiledTs(
+    "src/services/appUpdateState.ts",
+  );
+
+  const info = createAppUpdateInfo(
+    { currentVersion: null, version: "0.1.14", date: null, body: null },
+    "0.1.12",
+    "2026-06-09T03:06:59.000Z",
+  );
+
+  assert.equal(info.current_version, "0.1.12");
+  assert.equal(info.version, "0.1.14");
+  assert.equal(appUpdateVersionRange(info.current_version, info.version), "0.1.12 → 0.1.14");
+  assert.equal(appUpdateVersionRange("0.1.14", "0.1.14"), "0.1.14");
+});

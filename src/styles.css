@@ -4956,6 +4956,7 @@ h2 {
     minmax(90px, 0.5fr)
     minmax(80px, 0.5fr)
     minmax(150px, 0.8fr)
+    minmax(110px, 0.6fr)
     minmax(90px, 0.5fr)
     minmax(120px, 0.7fr)
     minmax(110px, 0.5fr);
@@ -5100,7 +5101,7 @@ h2 {
   }
 
   .github-remote-device-row {
-    min-width: 760px;
+    min-width: 860px;
   }
 
   .sync-control-grid {

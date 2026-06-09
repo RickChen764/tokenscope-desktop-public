@@ -96,6 +96,8 @@ const englishMessages: Record<string, string> = {
     "Group occasional maintenance, full refresh, export, and statistics boundary notes.",
   "执行低频维护动作：生成演示数据、全量刷新本机来源或导出 CSV。":
     "Run occasional maintenance actions: generate demo data, fully refresh local sources, or export CSV.",
+  "全量刷新会跳过增量游标重新扫描本机来源；不会删除源端已不存在的历史记录。":
+    "Full refresh skips the incremental cursor and rescans local sources; it does not delete historical rows that no longer exist upstream.",
   "数据迁移与扩展": "Portability & Extensions",
   "导入其他设备数据，或配置只读 SQLite 自定义数据源。":
     "Import data from other devices or configure read-only SQLite custom sources.",
@@ -332,6 +334,12 @@ const englishMessages: Record<string, string> = {
     "An app update is in progress. GitHub sync actions are temporarily locked.",
   "已耗时 {elapsed}": "Elapsed {elapsed}",
   "GitHub 同步进度": "GitHub sync progress",
+  "同步模式": "Sync Mode",
+  "模式": "Mode",
+  "统计同步（推荐）": "Statistics sync (recommended)",
+  "明细同步（兼容旧行为）": "Detail sync (legacy behavior)",
+  "统计同步（V3）": "Stats sync (V3)",
+  "明细同步（V2）": "Detail sync (V2)",
   "上传 {count} 个分片": "Uploaded {count} shards",
   "下载 {count} 个分片": "Downloaded {count} shards",
   "导入 {count} 条记录": "Imported {count} records",
@@ -393,6 +401,8 @@ const englishMessages: Record<string, string> = {
     "Sync failed: wrote {imported} rows, skipped {skipped} rows. {errors}",
   "同步完成：写入 {imported} 条，跳过 {skipped} 条。":
     "Sync complete: wrote {imported} rows, skipped {skipped} rows.",
+  "同步完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。":
+    "Sync complete: wrote {imported} rows, skipped {skipped} rows{cleanupText}.",
   "同步失败：{error}": "Sync failed: {error}",
   "CSV 已导出：{path}": "CSV exported: {path}",
   "导出 CSV 失败：{error}": "Failed to export CSV: {error}",
@@ -400,6 +410,8 @@ const englishMessages: Record<string, string> = {
     "Full refresh failed: wrote {imported} rows, skipped {skipped} rows. {errors}",
   "全量刷新完成：写入 {imported} 条，跳过 {skipped} 条。":
     "Full refresh complete: wrote {imported} rows, skipped {skipped} rows.",
+  "全量刷新完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。":
+    "Full refresh complete: wrote {imported} rows, skipped {skipped} rows{cleanupText}.",
   "全量刷新失败：{error}": "Full refresh failed: {error}",
   "后台自动同步设置已保存。": "Background sync settings saved.",
   "保存后台自动同步设置失败：{error}": "Failed to save background sync settings: {error}",
@@ -422,6 +434,7 @@ const englishMessages: Record<string, string> = {
     "Custom source sync complete: wrote {imported} rows, skipped {skipped} rows.",
   "自定义数据源同步失败：{error}": "Custom source sync failed: {error}",
   "自定义数据源配置已删除。": "Custom source profile deleted.",
+  "自定义数据源配置和已导入数据已删除。": "Custom source profile and imported data deleted.",
   "删除失败：{error}": "Delete failed: {error}",
   "读取设备数据失败：{error}": "Failed to read device data: {error}",
   ".tokenscope 数据包已导出：{path}": ".tokenscope package exported: {path}",

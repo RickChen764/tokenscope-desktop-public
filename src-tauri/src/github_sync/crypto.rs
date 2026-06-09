@@ -14,6 +14,8 @@ const ENVELOPE_VERSION: i64 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
+const BINARY_ENVELOPE_MAGIC: &[u8; 5] = b"TSGS2";
+const BINARY_ENVELOPE_HEADER_LEN: usize = BINARY_ENVELOPE_MAGIC.len() + SALT_LEN + NONCE_LEN;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncEncryptedEnvelope {
@@ -26,6 +28,7 @@ pub struct SyncEncryptedEnvelope {
     pub ciphertext_b64: String,
 }
 
+#[allow(dead_code)]
 pub fn encrypt_sync_payload(
     plaintext: &[u8],
     password: &str,
@@ -35,6 +38,14 @@ pub fn encrypt_sync_payload(
     OsRng.fill_bytes(&mut salt);
     OsRng.fill_bytes(&mut nonce);
     encrypt_sync_payload_with_material(plaintext, password, &salt, nonce)
+}
+
+pub fn encrypt_sync_payload_bytes(plaintext: &[u8], password: &str) -> Result<Vec<u8>, String> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce);
+    encrypt_sync_payload_bytes_with_material(plaintext, password, &salt, nonce)
 }
 
 #[allow(dead_code)]
@@ -58,19 +69,33 @@ pub fn decrypt_sync_payload(
     let ciphertext = STANDARD
         .decode(&envelope.ciphertext_b64)
         .map_err(|err| format!("同步文件密文无效：{err}"))?;
+    if salt.len() != SALT_LEN {
+        return Err("同步文件 salt 长度无效".to_string());
+    }
     if nonce.len() != NONCE_LEN {
         return Err("同步文件 nonce 长度无效".to_string());
     }
 
-    let key = derive_key(password, &salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|err| format!("初始化同步解密器失败：{err}"))?;
-    let compressed = cipher
-        .decrypt(XNonce::from_slice(&nonce), ciphertext.as_ref())
-        .map_err(|_| "解密失败：同步密码不正确或文件已损坏".to_string())?;
+    decrypt_sync_ciphertext(&salt, &nonce, &ciphertext, password)
+}
 
-    zstd::stream::decode_all(compressed.as_slice())
-        .map_err(|err| format!("解压同步文件失败：{err}"))
+pub fn decrypt_sync_payload_bytes(bytes: &[u8], password: &str) -> Result<Vec<u8>, String> {
+    if bytes.starts_with(BINARY_ENVELOPE_MAGIC) {
+        if bytes.len() <= BINARY_ENVELOPE_HEADER_LEN {
+            return Err("同步文件二进制信封长度无效".to_string());
+        }
+        let salt_start = BINARY_ENVELOPE_MAGIC.len();
+        let nonce_start = salt_start + SALT_LEN;
+        let ciphertext_start = nonce_start + NONCE_LEN;
+        let salt = &bytes[salt_start..nonce_start];
+        let nonce = &bytes[nonce_start..ciphertext_start];
+        let ciphertext = &bytes[ciphertext_start..];
+        return decrypt_sync_ciphertext(salt, nonce, ciphertext, password);
+    }
+
+    let envelope = serde_json::from_slice::<SyncEncryptedEnvelope>(bytes)
+        .map_err(|err| format!("GitHub 同步分片加密信封解析失败：{err}"))?;
+    decrypt_sync_payload(&envelope, password)
 }
 
 pub fn content_hash_hex(bytes: &[u8]) -> String {
@@ -87,20 +112,24 @@ fn encrypt_sync_payload_for_test(
     encrypt_sync_payload_with_material(plaintext, password, salt, nonce)
 }
 
+#[cfg(test)]
+fn encrypt_sync_payload_bytes_for_test(
+    plaintext: &[u8],
+    password: &str,
+    salt: &[u8],
+    nonce: [u8; NONCE_LEN],
+) -> Result<Vec<u8>, String> {
+    encrypt_sync_payload_bytes_with_material(plaintext, password, salt, nonce)
+}
+
+#[allow(dead_code)]
 fn encrypt_sync_payload_with_material(
     plaintext: &[u8],
     password: &str,
     salt: &[u8],
     nonce: [u8; NONCE_LEN],
 ) -> Result<SyncEncryptedEnvelope, String> {
-    let key = derive_key(password, salt)?;
-    let compressed =
-        zstd::stream::encode_all(plaintext, 3).map_err(|err| format!("压缩同步数据失败：{err}"))?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|err| format!("初始化同步加密器失败：{err}"))?;
-    let ciphertext = cipher
-        .encrypt(XNonce::from_slice(&nonce), compressed.as_ref())
-        .map_err(|err| format!("加密同步数据失败：{err}"))?;
+    let ciphertext = encrypt_sync_ciphertext(plaintext, password, salt, nonce)?;
 
     Ok(SyncEncryptedEnvelope {
         version: ENVELOPE_VERSION,
@@ -111,6 +140,61 @@ fn encrypt_sync_payload_with_material(
         nonce_b64: STANDARD.encode(nonce),
         ciphertext_b64: STANDARD.encode(ciphertext),
     })
+}
+
+fn encrypt_sync_payload_bytes_with_material(
+    plaintext: &[u8],
+    password: &str,
+    salt: &[u8],
+    nonce: [u8; NONCE_LEN],
+) -> Result<Vec<u8>, String> {
+    let ciphertext = encrypt_sync_ciphertext(plaintext, password, salt, nonce)?;
+    let mut bytes = Vec::with_capacity(BINARY_ENVELOPE_HEADER_LEN + ciphertext.len());
+    bytes.extend_from_slice(BINARY_ENVELOPE_MAGIC);
+    bytes.extend_from_slice(salt);
+    bytes.extend_from_slice(&nonce);
+    bytes.extend_from_slice(&ciphertext);
+    Ok(bytes)
+}
+
+fn encrypt_sync_ciphertext(
+    plaintext: &[u8],
+    password: &str,
+    salt: &[u8],
+    nonce: [u8; NONCE_LEN],
+) -> Result<Vec<u8>, String> {
+    let key = derive_key(password, salt)?;
+    let compressed =
+        zstd::stream::encode_all(plaintext, 3).map_err(|err| format!("压缩同步数据失败：{err}"))?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key)
+        .map_err(|err| format!("初始化同步加密器失败：{err}"))?;
+    cipher
+        .encrypt(XNonce::from_slice(&nonce), compressed.as_ref())
+        .map_err(|err| format!("加密同步数据失败：{err}"))
+}
+
+fn decrypt_sync_ciphertext(
+    salt: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+    password: &str,
+) -> Result<Vec<u8>, String> {
+    if salt.len() != SALT_LEN {
+        return Err("同步文件 salt 长度无效".to_string());
+    }
+    if nonce.len() != NONCE_LEN {
+        return Err("同步文件 nonce 长度无效".to_string());
+    }
+
+    let key = derive_key(password, salt)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key)
+        .map_err(|err| format!("初始化同步解密器失败：{err}"))?;
+    let compressed = cipher
+        .decrypt(XNonce::from_slice(nonce), ciphertext.as_ref())
+        .map_err(|_| "解密失败：同步密码不正确或文件已损坏".to_string())?;
+
+    zstd::stream::decode_all(compressed.as_slice())
+        .map_err(|err| format!("解压同步文件失败：{err}"))
 }
 
 fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], String> {
@@ -158,6 +242,39 @@ mod tests {
             decrypt_sync_payload(&random_envelope, "correct horse battery staple")
                 .expect("random payload decrypts");
         assert_eq!(random_decrypted, plaintext);
+    }
+
+    #[test]
+    fn binary_sync_payload_round_trips_and_decodes_legacy_json_envelopes() {
+        let plaintext = br#"{"calls":[{"date_local":"2026-06-01","total_tokens":123456},{"date_local":"2026-06-01","total_tokens":789012}]}"#;
+        let json_envelope = encrypt_sync_payload_for_test(
+            plaintext,
+            "correct horse battery staple",
+            b"0123456789abcdef",
+            [7u8; 24],
+        )
+        .expect("json payload encrypts");
+        let json_bytes = serde_json::to_vec(&json_envelope).expect("json envelope serializes");
+        let binary_bytes = encrypt_sync_payload_bytes_for_test(
+            plaintext,
+            "correct horse battery staple",
+            b"0123456789abcdef",
+            [7u8; 24],
+        )
+        .expect("binary payload encrypts");
+
+        assert!(binary_bytes.starts_with(b"TSGS2"));
+        assert!(binary_bytes.len() < json_bytes.len());
+        assert_eq!(
+            decrypt_sync_payload_bytes(&binary_bytes, "correct horse battery staple")
+                .expect("binary payload decrypts"),
+            plaintext
+        );
+        assert_eq!(
+            decrypt_sync_payload_bytes(&json_bytes, "correct horse battery staple")
+                .expect("legacy json payload decrypts"),
+            plaintext
+        );
     }
 
     #[test]

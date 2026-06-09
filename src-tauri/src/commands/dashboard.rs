@@ -450,6 +450,9 @@ pub async fn import_detected_agents(
     state: State<'_, AppState>,
     mode: Option<String>,
 ) -> Result<Vec<AgentImportResult>, String> {
+    let Some(_guard) = state.sync_runtime.try_start() else {
+        return Err("已有同步任务正在执行。".to_string());
+    };
     Ok(import_agents(&state.repository, ImportMode::from_option(mode.as_deref())).await)
 }
 

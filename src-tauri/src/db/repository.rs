@@ -3,8 +3,9 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Local, NaiveDate};
 use serde_json::Value;
 use sha2::{Digest, Sha384};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::{query, query_as, QueryBuilder, Row, Sqlite, SqlitePool};
+use sqlx::query::Query;
+use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::{query, query_as, QueryBuilder, Row, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use crate::pricing::{
@@ -17,94 +18,21 @@ use super::models::{
     AgentSourceStats, AppSettings, AppSettingsInput, CallFilterOptions, CustomImporterProfile,
     CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint, DashboardSummary,
     DataHealthIssueRow, DataHealthIssueSummary, DataHealthSummary, ExternalDataset,
-    ExternalDatasetImportCall, ExternalDatasetInput, GitHubSyncRemoteDevice, GitHubSyncSettings,
+    ExternalDatasetImportCall, ExternalDatasetInput, ExternalDimensionUsageAggregateInput,
+    ExternalUsageAggregateInput, GitHubSyncRemoteDevice, GitHubSyncSettings,
     GitHubSyncSettingsInput, GitHubSyncShardState, GitHubSyncShardStateInput, LlmCallFilters,
     LlmCallPage, LlmCallRow, NewLlmCall, ProviderConfig, ProviderConfigInput, SyncSettings,
     SyncSettingsInput, TokenPulseHourlyPoint, TokenPulseSnapshot, TokenPulseWindowPosition,
-    TopDimensionRow, UnknownPricingModel,
+    TopDimensionRow, UnknownPricingModel, GITHUB_SYNC_DATA_MODE_AGGREGATE_V3,
+    GITHUB_SYNC_DATA_MODE_DETAIL_V2,
 };
 
 const DASHBOARD_SUMMARY_SQL: &str = include_str!("../../sql/dashboard_summary.sql");
 const DAILY_USAGE_SERIES_TOTAL_SQL: &str = include_str!("../../sql/daily_usage_series_total.sql");
-const TOP_AGENTS_SQL: &str = include_str!("../../sql/top_agents.sql");
-const TOP_MODELS_SQL: &str = include_str!("../../sql/top_models.sql");
-const TOP_PROVIDERS_SQL: &str = include_str!("../../sql/top_providers.sql");
-const TOP_WORKFLOWS_SQL: &str = include_str!("../../sql/top_workflows.sql");
-const TOP_PROJECTS_SQL: &str = include_str!("../../sql/top_projects.sql");
-const TOP_SESSIONS_SQL: &str = include_str!("../../sql/top_sessions.sql");
 const RECENT_CALLS_SQL: &str = include_str!("../../sql/recent_calls.sql");
 const AGENT_SOURCE_STATS_SQL: &str = include_str!("../../sql/agent_source_stats.sql");
 const SEED_DEMO_SQL: &str = include_str!("../../sql/seed_demo.sql");
-const MIGRATION_BYTES: &[(i64, &[u8])] = &[
-    (
-        1,
-        include_bytes!("../../migrations/0001_initial_schema.sql"),
-    ),
-    (
-        2,
-        include_bytes!("../../migrations/0002_agent_import_map.sql"),
-    ),
-    (3, include_bytes!("../../migrations/0003_app_setting.sql")),
-    (
-        4,
-        include_bytes!("../../migrations/0004_custom_importer_profiles.sql"),
-    ),
-    (
-        5,
-        include_bytes!("../../migrations/0005_external_datasets.sql"),
-    ),
-    (6, include_bytes!("../../migrations/0006_cost_currency.sql")),
-    (7, include_bytes!("../../migrations/0007_github_sync.sql")),
-    (
-        8,
-        include_bytes!("../../migrations/0008_github_sync_blob_sha.sql"),
-    ),
-];
-
-#[derive(Clone)]
-pub struct TokenScopeRepository {
-    pool: SqlitePool,
-}
-
-impl TokenScopeRepository {
-    pub async fn connect(path: &Path) -> Result<Self, sqlx::Error> {
-        let options = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect_with(options)
-            .await?;
-
-        Ok(Self { pool })
-    }
-
-    #[cfg(test)]
-    pub async fn connect_in_memory() -> Result<Self, sqlx::Error> {
-        let options = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await?;
-
-        Ok(Self { pool })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
-        normalize_line_ending_migration_checksums(&self.pool).await?;
-        sqlx::migrate!("./migrations").run(&self.pool).await
-    }
-
-    pub async fn insert_llm_call(&self, call: &NewLlmCall) -> Result<(), sqlx::Error> {
-        query(
-            r#"
+const INSERT_LLM_CALL_SQL: &str = r#"
       INSERT OR REPLACE INTO llm_call (
         id,
         started_at,
@@ -167,63 +95,80 @@ impl TokenScopeRepository {
         ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50,
         ?51, ?52, ?53
       )
-      "#,
-        )
-        .bind(&call.id)
-        .bind(&call.started_at)
-        .bind(&call.ended_at)
-        .bind(&call.date_local)
-        .bind(&call.provider)
-        .bind(&call.provider_config_id)
-        .bind(&call.api_type)
-        .bind(&call.model_requested)
-        .bind(&call.model_response)
-        .bind(&call.agent_id)
-        .bind(&call.agent_name)
-        .bind(&call.agent_run_id)
-        .bind(&call.workflow_id)
-        .bind(&call.workflow_step)
-        .bind(&call.session_id)
-        .bind(&call.trace_id)
-        .bind(&call.span_id)
-        .bind(&call.parent_span_id)
-        .bind(&call.project_id)
-        .bind(&call.user_id)
-        .bind(&call.environment)
-        .bind(&call.feature)
-        .bind(call.input_tokens)
-        .bind(call.output_tokens)
-        .bind(call.cached_input_tokens)
-        .bind(call.cache_write_input_tokens)
-        .bind(call.reasoning_output_tokens)
-        .bind(call.audio_input_tokens)
-        .bind(call.audio_output_tokens)
-        .bind(call.image_input_tokens)
-        .bind(call.image_output_tokens)
-        .bind(call.total_tokens)
-        .bind(call.total_billable_tokens)
-        .bind(call.request_count)
-        .bind(call.tool_call_count)
-        .bind(call.retry_count)
-        .bind(call.latency_ms)
-        .bind(call.http_status)
-        .bind(&call.status)
-        .bind(&call.error_type)
-        .bind(&call.error_message)
-        .bind(call.estimated_cost_usd)
-        .bind(&call.cost_currency)
-        .bind(call.provider_reported_cost_usd)
-        .bind(call.reconciled_cost_usd)
-        .bind(&call.cost_source)
-        .bind(&call.usage_source)
-        .bind(&call.raw_usage_json)
-        .bind(&call.raw_response_json)
-        .bind(&call.request_hash)
-        .bind(&call.response_hash)
-        .bind(&call.prompt_template_id)
-        .bind(&call.created_at)
-        .execute(&self.pool)
-        .await?;
+      "#;
+const MIGRATION_BYTES: &[(i64, &[u8])] = &[
+    (
+        1,
+        include_bytes!("../../migrations/0001_initial_schema.sql"),
+    ),
+    (
+        2,
+        include_bytes!("../../migrations/0002_agent_import_map.sql"),
+    ),
+    (3, include_bytes!("../../migrations/0003_app_setting.sql")),
+    (
+        4,
+        include_bytes!("../../migrations/0004_custom_importer_profiles.sql"),
+    ),
+    (
+        5,
+        include_bytes!("../../migrations/0005_external_datasets.sql"),
+    ),
+    (6, include_bytes!("../../migrations/0006_cost_currency.sql")),
+    (7, include_bytes!("../../migrations/0007_github_sync.sql")),
+    (
+        8,
+        include_bytes!("../../migrations/0008_github_sync_blob_sha.sql"),
+    ),
+    (
+        9,
+        include_bytes!("../../migrations/0009_github_sync_aggregate_v3.sql"),
+    ),
+];
+
+#[derive(Clone)]
+pub struct TokenScopeRepository {
+    pool: SqlitePool,
+}
+
+impl TokenScopeRepository {
+    pub async fn connect(path: &Path) -> Result<Self, sqlx::Error> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await?;
+
+        Ok(Self { pool })
+    }
+
+    #[cfg(test)]
+    pub async fn connect_in_memory() -> Result<Self, sqlx::Error> {
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+
+        Ok(Self { pool })
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        normalize_line_ending_migration_checksums(&self.pool).await?;
+        sqlx::migrate!("./migrations").run(&self.pool).await
+    }
+
+    pub async fn insert_llm_call(&self, call: &NewLlmCall) -> Result<(), sqlx::Error> {
+        insert_llm_call_query(call).execute(&self.pool).await?;
 
         Ok(())
     }
@@ -255,7 +200,8 @@ impl TokenScopeRepository {
         calls,
         total_tokens,
         estimated_cost_usd,
-        cost_currency
+        cost_currency,
+        sync_data_mode
       FROM external_dataset
       ORDER BY updated_at DESC, device_name ASC
       "#,
@@ -281,8 +227,9 @@ impl TokenScopeRepository {
         calls,
         total_tokens,
         estimated_cost_usd,
-        cost_currency
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        cost_currency,
+        sync_data_mode
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
       ON CONFLICT(id) DO UPDATE SET
         device_id = excluded.device_id,
         device_name = excluded.device_name,
@@ -293,7 +240,8 @@ impl TokenScopeRepository {
         calls = excluded.calls,
         total_tokens = excluded.total_tokens,
         estimated_cost_usd = excluded.estimated_cost_usd,
-        cost_currency = excluded.cost_currency
+        cost_currency = excluded.cost_currency,
+        sync_data_mode = excluded.sync_data_mode
       "#,
         )
         .bind(&input.id)
@@ -307,6 +255,7 @@ impl TokenScopeRepository {
         .bind(input.total_tokens)
         .bind(input.estimated_cost_usd)
         .bind(&input.cost_currency)
+        .bind(normalize_github_sync_data_mode(&input.sync_data_mode))
         .execute(&self.pool)
         .await?;
 
@@ -320,13 +269,38 @@ impl TokenScopeRepository {
         input: &ExternalDatasetInput,
         calls: &[ExternalDatasetImportCall],
     ) -> Result<ExternalDataset, sqlx::Error> {
-        self.remove_external_dataset(&input.id).await?;
-        let dataset = self.upsert_external_dataset(input).await?;
+        let mut tx = self.pool.begin().await?;
+        query("DELETE FROM llm_call WHERE origin_dataset_id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_daily_usage WHERE dataset_id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dimension_usage WHERE dataset_id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM agent_import_map WHERE dataset_id = ?1 OR source LIKE ?2")
+            .bind(&input.id)
+            .bind(format!("external:{}:%", input.id))
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dataset WHERE id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        upsert_external_dataset_tx(&mut tx, input).await?;
         for call in calls {
-            self.insert_external_dataset_call(&input.id, call).await?;
+            self.insert_external_dataset_call_tx(&mut tx, &input.id, call)
+                .await?;
         }
+        tx.commit().await?;
 
-        Ok(dataset)
+        self.get_external_dataset(&input.id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
     }
 
     pub async fn replace_external_dataset_date(
@@ -335,7 +309,8 @@ impl TokenScopeRepository {
         date_local: &str,
         calls: &[ExternalDatasetImportCall],
     ) -> Result<ExternalDataset, sqlx::Error> {
-        self.upsert_external_dataset(input).await?;
+        let mut tx = self.pool.begin().await?;
+        upsert_external_dataset_tx(&mut tx, input).await?;
         query(
             r#"
       DELETE FROM agent_import_map
@@ -349,16 +324,27 @@ impl TokenScopeRepository {
         )
         .bind(&input.id)
         .bind(date_local)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         query("DELETE FROM llm_call WHERE origin_dataset_id = ?1 AND date_local = ?2")
             .bind(&input.id)
             .bind(date_local)
-            .execute(&self.pool)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_daily_usage WHERE dataset_id = ?1 AND date_local = ?2")
+            .bind(&input.id)
+            .bind(date_local)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dimension_usage WHERE dataset_id = ?1 AND date_local = ?2")
+            .bind(&input.id)
+            .bind(date_local)
+            .execute(&mut *tx)
             .await?;
 
         for call in calls {
-            self.insert_external_dataset_call(&input.id, call).await?;
+            self.insert_external_dataset_call_tx(&mut tx, &input.id, call)
+                .await?;
         }
 
         let summary = query(
@@ -372,7 +358,7 @@ impl TokenScopeRepository {
       "#,
         )
         .bind(&input.id)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
         query(
             r#"
@@ -392,8 +378,105 @@ impl TokenScopeRepository {
         .bind(&input.cost_currency)
         .bind(&input.updated_at)
         .bind(&input.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
+
+        self.get_external_dataset(&input.id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn replace_external_aggregate_dataset(
+        &self,
+        input: &ExternalDatasetInput,
+        daily_rows: &[ExternalUsageAggregateInput],
+        dimension_rows: &[ExternalDimensionUsageAggregateInput],
+    ) -> Result<ExternalDataset, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        query("DELETE FROM llm_call WHERE origin_dataset_id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM agent_import_map WHERE dataset_id = ?1 OR source LIKE ?2")
+            .bind(&input.id)
+            .bind(format!("external:{}:%", input.id))
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_daily_usage WHERE dataset_id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dimension_usage WHERE dataset_id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dataset WHERE id = ?1")
+            .bind(&input.id)
+            .execute(&mut *tx)
+            .await?;
+        upsert_external_dataset_tx(&mut tx, input).await?;
+        for row in daily_rows {
+            insert_external_daily_usage_tx(&mut tx, &input.id, row).await?;
+        }
+        for row in dimension_rows {
+            insert_external_dimension_usage_tx(&mut tx, &input.id, row).await?;
+        }
+        tx.commit().await?;
+
+        self.get_external_dataset(&input.id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn replace_external_aggregate_dataset_date(
+        &self,
+        input: &ExternalDatasetInput,
+        date_local: &str,
+        daily_rows: &[ExternalUsageAggregateInput],
+        dimension_rows: &[ExternalDimensionUsageAggregateInput],
+    ) -> Result<ExternalDataset, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        upsert_external_dataset_tx(&mut tx, input).await?;
+        query(
+            r#"
+      DELETE FROM agent_import_map
+      WHERE dataset_id = ?1
+        AND llm_call_id IN (
+          SELECT id
+          FROM llm_call
+          WHERE origin_dataset_id = ?1 AND date_local = ?2
+        )
+      "#,
+        )
+        .bind(&input.id)
+        .bind(date_local)
+        .execute(&mut *tx)
+        .await?;
+        query("DELETE FROM llm_call WHERE origin_dataset_id = ?1 AND date_local = ?2")
+            .bind(&input.id)
+            .bind(date_local)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_daily_usage WHERE dataset_id = ?1 AND date_local = ?2")
+            .bind(&input.id)
+            .bind(date_local)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dimension_usage WHERE dataset_id = ?1 AND date_local = ?2")
+            .bind(&input.id)
+            .bind(date_local)
+            .execute(&mut *tx)
+            .await?;
+
+        for row in daily_rows {
+            insert_external_daily_usage_tx(&mut tx, &input.id, row).await?;
+        }
+        for row in dimension_rows {
+            insert_external_dimension_usage_tx(&mut tx, &input.id, row).await?;
+        }
+        refresh_external_aggregate_dataset_summary_tx(&mut tx, input).await?;
+        tx.commit().await?;
 
         self.get_external_dataset(&input.id)
             .await?
@@ -407,6 +490,14 @@ impl TokenScopeRepository {
             .execute(&mut *tx)
             .await?
             .rows_affected() as i64;
+        query("DELETE FROM external_daily_usage WHERE dataset_id = ?1")
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM external_dimension_usage WHERE dataset_id = ?1")
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
         query("DELETE FROM agent_import_map WHERE dataset_id = ?1 OR source LIKE ?2")
             .bind(dataset_id)
             .bind(format!("external:{dataset_id}:%"))
@@ -438,7 +529,8 @@ impl TokenScopeRepository {
         calls,
         total_tokens,
         estimated_cost_usd,
-        cost_currency
+        cost_currency,
+        sync_data_mode
       FROM external_dataset
       WHERE id = ?1
       "#,
@@ -448,8 +540,9 @@ impl TokenScopeRepository {
         .await
     }
 
-    async fn insert_external_dataset_call(
+    async fn insert_external_dataset_call_tx(
         &self,
+        tx: &mut Transaction<'_, Sqlite>,
         dataset_id: &str,
         import_call: &ExternalDatasetImportCall,
     ) -> Result<(), sqlx::Error> {
@@ -463,7 +556,7 @@ impl TokenScopeRepository {
         )
         .bind(&source)
         .bind(&import_call.external_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **tx)
         .await?
         .and_then(|row| row.try_get("llm_call_id").ok());
 
@@ -472,11 +565,11 @@ impl TokenScopeRepository {
             call.id = existing_call_id;
         }
 
-        self.insert_llm_call(&call).await?;
+        insert_llm_call_query(&call).execute(&mut **tx).await?;
         query("UPDATE llm_call SET origin_dataset_id = ?1 WHERE id = ?2")
             .bind(dataset_id)
             .bind(&call.id)
-            .execute(&self.pool)
+            .execute(&mut **tx)
             .await?;
         query(
             r#"
@@ -498,6 +591,26 @@ impl TokenScopeRepository {
         .bind(&call.id)
         .bind(Local::now().to_rfc3339())
         .bind(dataset_id)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_external_dataset_sync_data_mode_for_device(
+        &self,
+        device_id: &str,
+        sync_data_mode: &str,
+    ) -> Result<(), sqlx::Error> {
+        query(
+            r#"
+      UPDATE external_dataset
+      SET sync_data_mode = ?1
+      WHERE device_id = ?2
+      "#,
+        )
+        .bind(normalize_github_sync_data_mode(sync_data_mode))
+        .bind(device_id)
         .execute(&self.pool)
         .await?;
 
@@ -543,15 +656,67 @@ impl TokenScopeRepository {
         let expression = dimension_expression(dimension)?;
         let sql = format!(
             r#"
-      WITH filtered AS (
-        SELECT *
-        FROM llm_call
-        WHERE date_local BETWEEN ?1 AND ?2
+      WITH detail_filtered AS (
+        SELECT c.*
+        FROM llm_call c
+        LEFT JOIN external_dataset d ON d.id = c.origin_dataset_id
+        WHERE c.date_local BETWEEN ?1 AND ?2
           AND {expression} = ?3
+          AND (
+            c.origin_dataset_id IS NULL
+            OR d.sync_data_mode = 'detail_v2'
+          )
+      ),
+      aggregate_filtered AS (
+        SELECT a.*
+        FROM external_dimension_usage a
+        JOIN external_dataset d ON d.id = a.dataset_id
+        WHERE a.date_local BETWEEN ?1 AND ?2
+          AND d.sync_data_mode = 'aggregate_v3'
+          AND a.dimension_type = ?4
+          AND a.dimension_value = ?3
+      ),
+      detail_summary AS (
+        SELECT
+          COALESCE(SUM(total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(input_tokens), 0) AS input_tokens,
+          COALESCE(SUM(output_tokens), 0) AS output_tokens,
+          COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+          COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+          COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+          COUNT(*) AS calls,
+          COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_calls,
+          COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS error_calls,
+          COALESCE(SUM(CASE WHEN latency_ms IS NOT NULL THEN latency_ms ELSE 0 END), 0) AS latency_sum_ms,
+          COALESCE(SUM(CASE WHEN latency_ms IS NOT NULL THEN 1 ELSE 0 END), 0) AS latency_count
+        FROM detail_filtered
+      ),
+      aggregate_summary AS (
+        SELECT
+          COALESCE(SUM(total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(input_tokens), 0) AS input_tokens,
+          COALESCE(SUM(output_tokens), 0) AS output_tokens,
+          COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+          COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+          COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+          COALESCE(SUM(calls), 0) AS calls,
+          COALESCE(SUM(success_calls), 0) AS success_calls,
+          COALESCE(SUM(error_calls), 0) AS error_calls,
+          COALESCE(SUM(latency_sum_ms), 0) AS latency_sum_ms,
+          COALESCE(SUM(latency_count), 0) AS latency_count
+        FROM aggregate_filtered
+      ),
+      cost_currencies AS (
+        SELECT COALESCE(cost_currency, 'USD') AS cost_currency
+        FROM detail_filtered
+        UNION ALL
+        SELECT COALESCE(cost_currency, 'USD') AS cost_currency
+        FROM aggregate_filtered
+        WHERE calls > 0
       ),
       top_agent AS (
         SELECT agent_id
-        FROM filtered
+        FROM detail_filtered
         WHERE agent_id IS NOT NULL AND agent_id <> ''
         GROUP BY agent_id
         ORDER BY SUM(total_tokens) DESC, COUNT(*) DESC, agent_id ASC
@@ -559,35 +724,53 @@ impl TokenScopeRepository {
       ),
       top_model AS (
         SELECT COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, '')) AS model
-        FROM filtered
+        FROM detail_filtered
         WHERE COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, '')) IS NOT NULL
         GROUP BY model
         ORDER BY SUM(total_tokens) DESC, COUNT(*) DESC, model ASC
         LIMIT 1
+      ),
+      summary AS (
+        SELECT
+          detail_summary.total_tokens + aggregate_summary.total_tokens AS total_tokens,
+          detail_summary.input_tokens + aggregate_summary.input_tokens AS input_tokens,
+          detail_summary.output_tokens + aggregate_summary.output_tokens AS output_tokens,
+          detail_summary.cached_input_tokens + aggregate_summary.cached_input_tokens AS cached_input_tokens,
+          detail_summary.reasoning_output_tokens + aggregate_summary.reasoning_output_tokens AS reasoning_output_tokens,
+          detail_summary.estimated_cost_usd + aggregate_summary.estimated_cost_usd AS estimated_cost_usd,
+          detail_summary.calls + aggregate_summary.calls AS calls,
+          detail_summary.success_calls + aggregate_summary.success_calls AS success_calls,
+          detail_summary.error_calls + aggregate_summary.error_calls AS error_calls,
+          detail_summary.latency_sum_ms + aggregate_summary.latency_sum_ms AS latency_sum_ms,
+          detail_summary.latency_count + aggregate_summary.latency_count AS latency_count
+        FROM detail_summary, aggregate_summary
       )
       SELECT
-        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-        COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-        COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        summary.total_tokens,
+        summary.input_tokens,
+        summary.output_tokens,
+        summary.cached_input_tokens,
+        summary.reasoning_output_tokens,
+        summary.estimated_cost_usd,
         CASE
-          WHEN COUNT(*) = 0 THEN 'USD'
-          WHEN COUNT(DISTINCT COALESCE(cost_currency, 'USD')) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
+          WHEN (SELECT COUNT(*) FROM cost_currencies) = 0 THEN 'USD'
+          WHEN (SELECT COUNT(DISTINCT cost_currency) FROM cost_currencies) = 1 THEN (SELECT MAX(cost_currency) FROM cost_currencies)
           ELSE 'MIXED'
         END AS cost_currency,
-        COUNT(*) AS calls,
-        COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_calls,
-        COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS error_calls,
+        summary.calls,
+        summary.success_calls,
+        summary.error_calls,
         CASE
-          WHEN COUNT(*) = 0 THEN 0.0
-          ELSE COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) * 1.0 / COUNT(*)
+          WHEN summary.calls = 0 THEN 0.0
+          ELSE CAST(summary.error_calls AS REAL) / CAST(summary.calls AS REAL)
         END AS error_rate,
-        AVG(latency_ms) AS avg_latency_ms,
+        CASE
+          WHEN summary.latency_count = 0 THEN NULL
+          ELSE CAST(summary.latency_sum_ms AS REAL) / CAST(summary.latency_count AS REAL)
+        END AS avg_latency_ms,
         (SELECT agent_id FROM top_agent) AS top_agent_id,
         (SELECT model FROM top_model) AS top_model
-      FROM filtered
+      FROM summary
       "#
         );
 
@@ -595,6 +778,7 @@ impl TokenScopeRepository {
             .bind(from)
             .bind(to)
             .bind(value)
+            .bind(dimension)
             .fetch_one(&self.pool)
             .await
             .map_err(|err| err.to_string())?;
@@ -639,14 +823,23 @@ impl TokenScopeRepository {
     ) -> Result<Vec<DailyUsagePoint>, String> {
         let sql = match group_by {
             None => DAILY_USAGE_SERIES_TOTAL_SQL.to_string(),
-            Some("provider") => daily_grouped_sql("provider"),
+            Some("provider") => daily_grouped_sql("provider", "provider"),
             Some("model") => daily_grouped_sql(
+                "model",
                 "COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, ''), 'unknown')",
             ),
-            Some("agent") => daily_grouped_sql("COALESCE(NULLIF(agent_id, ''), 'unknown')"),
-            Some("workflow") => daily_grouped_sql("COALESCE(NULLIF(workflow_id, ''), 'unknown')"),
-            Some("project") => daily_grouped_sql("COALESCE(NULLIF(project_id, ''), 'unknown')"),
-            Some("session") => daily_grouped_sql("COALESCE(NULLIF(session_id, ''), 'unknown')"),
+            Some("agent") => {
+                daily_grouped_sql("agent", "COALESCE(NULLIF(agent_id, ''), 'unknown')")
+            }
+            Some("workflow") => {
+                daily_grouped_sql("workflow", "COALESCE(NULLIF(workflow_id, ''), 'unknown')")
+            }
+            Some("project") => {
+                daily_grouped_sql("project", "COALESCE(NULLIF(project_id, ''), 'unknown')")
+            }
+            Some("session") => {
+                daily_grouped_sql("session", "COALESCE(NULLIF(session_id, ''), 'unknown')")
+            }
             Some(other) => return Err(format!("unsupported daily series group_by: {other}")),
         };
 
@@ -740,10 +933,55 @@ impl TokenScopeRepository {
         let expression = dimension_expression(dimension)?;
         let sql = format!(
             r#"
+    WITH detail_filtered AS (
+      SELECT c.*
+      FROM llm_call c
+      LEFT JOIN external_dataset d ON d.id = c.origin_dataset_id
+      WHERE c.date_local BETWEEN ?1 AND ?2
+        AND {expression} = ?3
+        AND (
+          c.origin_dataset_id IS NULL
+          OR d.sync_data_mode = 'detail_v2'
+        )
+    ),
+    combined AS (
+      SELECT
+        date_local,
+        {expression} AS dimension,
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+        COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        COALESCE(cost_currency, 'USD') AS cost_currency
+      FROM detail_filtered
+      GROUP BY date_local, dimension, COALESCE(cost_currency, 'USD')
+      UNION ALL
+      SELECT
+        a.date_local,
+        a.dimension_value AS dimension,
+        COALESCE(SUM(a.calls), 0) AS calls,
+        COALESCE(SUM(a.input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(a.output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(a.cached_input_tokens), 0) AS cached_input_tokens,
+        COALESCE(SUM(a.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+        COALESCE(SUM(a.total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(a.estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        COALESCE(a.cost_currency, 'USD') AS cost_currency
+      FROM external_dimension_usage a
+      JOIN external_dataset d ON d.id = a.dataset_id
+      WHERE a.date_local BETWEEN ?1 AND ?2
+        AND d.sync_data_mode = 'aggregate_v3'
+        AND a.dimension_type = ?4
+        AND a.dimension_value = ?3
+      GROUP BY a.date_local, a.dimension_value, COALESCE(a.cost_currency, 'USD')
+    )
     SELECT
       date_local,
-      {expression} AS dimension,
-      COUNT(*) AS calls,
+      dimension,
+      COALESCE(SUM(calls), 0) AS calls,
       COALESCE(SUM(input_tokens), 0) AS input_tokens,
       COALESCE(SUM(output_tokens), 0) AS output_tokens,
       COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
@@ -751,12 +989,10 @@ impl TokenScopeRepository {
       COALESCE(SUM(total_tokens), 0) AS total_tokens,
       COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
       CASE
-        WHEN COUNT(DISTINCT COALESCE(cost_currency, 'USD')) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
+        WHEN COUNT(DISTINCT cost_currency) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
         ELSE 'MIXED'
       END AS cost_currency
-    FROM llm_call
-    WHERE date_local BETWEEN ?1 AND ?2
-      AND {expression} = ?3
+    FROM combined
     GROUP BY date_local, dimension
     ORDER BY date_local ASC, dimension ASC
     "#
@@ -766,6 +1002,7 @@ impl TokenScopeRepository {
             .bind(from)
             .bind(to)
             .bind(value)
+            .bind(dimension)
             .fetch_all(&self.pool)
             .await
             .map(|rows| rows.into_iter().map(Into::into).collect())
@@ -778,7 +1015,15 @@ impl TokenScopeRepository {
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        self.top_dimensions(TOP_AGENTS_SQL, from, to, limit).await
+        self.top_dimensions(
+            "agent",
+            "agent_id",
+            "agent_id IS NOT NULL AND agent_id <> ''",
+            from,
+            to,
+            limit,
+        )
+        .await
     }
 
     pub async fn top_models(
@@ -787,7 +1032,15 @@ impl TokenScopeRepository {
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        self.top_dimensions(TOP_MODELS_SQL, from, to, limit).await
+        self.top_dimensions(
+            "model",
+            "COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, ''))",
+            "COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, '')) IS NOT NULL",
+            from,
+            to,
+            limit,
+        )
+        .await
     }
 
     pub async fn top_providers(
@@ -796,8 +1049,15 @@ impl TokenScopeRepository {
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        self.top_dimensions(TOP_PROVIDERS_SQL, from, to, limit)
-            .await
+        self.top_dimensions(
+            "provider",
+            "provider",
+            "provider IS NOT NULL AND provider <> ''",
+            from,
+            to,
+            limit,
+        )
+        .await
     }
 
     pub async fn top_workflows(
@@ -806,8 +1066,15 @@ impl TokenScopeRepository {
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        self.top_dimensions(TOP_WORKFLOWS_SQL, from, to, limit)
-            .await
+        self.top_dimensions(
+            "workflow",
+            "workflow_id",
+            "workflow_id IS NOT NULL AND workflow_id <> ''",
+            from,
+            to,
+            limit,
+        )
+        .await
     }
 
     pub async fn top_projects(
@@ -816,7 +1083,15 @@ impl TokenScopeRepository {
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        self.top_dimensions(TOP_PROJECTS_SQL, from, to, limit).await
+        self.top_dimensions(
+            "project",
+            "project_id",
+            "project_id IS NOT NULL AND project_id <> ''",
+            from,
+            to,
+            limit,
+        )
+        .await
     }
 
     pub async fn top_sessions(
@@ -825,7 +1100,15 @@ impl TokenScopeRepository {
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        self.top_dimensions(TOP_SESSIONS_SQL, from, to, limit).await
+        self.top_dimensions(
+            "session",
+            "session_id",
+            "session_id IS NOT NULL AND session_id <> ''",
+            from,
+            to,
+            limit,
+        )
+        .await
     }
 
     pub async fn recent_calls(&self, limit: i64) -> Result<Vec<LlmCallRow>, sqlx::Error> {
@@ -1095,12 +1378,43 @@ impl TokenScopeRepository {
     }
 
     pub async fn delete_custom_importer_profile(&self, id: &str) -> Result<bool, sqlx::Error> {
-        let result = query("DELETE FROM custom_importer_profile WHERE id = ?1")
+        let Some(row) = query("SELECT source_key FROM custom_importer_profile WHERE id = ?1")
             .bind(id)
-            .execute(&self.pool)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let source_key = row.try_get::<String, _>("source_key")?;
+        let mut tx = self.pool.begin().await?;
+        query(
+            r#"
+      DELETE FROM llm_call
+      WHERE id IN (
+        SELECT llm_call_id
+        FROM agent_import_map
+        WHERE source = ?1
+      )
+      "#,
+        )
+        .bind(&source_key)
+        .execute(&mut *tx)
+        .await?;
+        query("DELETE FROM agent_import_map WHERE source = ?1")
+            .bind(&source_key)
+            .execute(&mut *tx)
             .await?;
+        query("DELETE FROM custom_importer_run WHERE profile_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        query("DELETE FROM custom_importer_profile WHERE id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
 
-        Ok(result.rows_affected() > 0)
+        Ok(true)
     }
 
     pub async fn record_custom_importer_run(
@@ -1550,6 +1864,17 @@ impl TokenScopeRepository {
             .await?
             .map(|value| value == "true")
             .unwrap_or(false);
+        let data_mode = self
+            .app_setting_value("github_sync_data_mode")
+            .await?
+            .map(|value| normalize_github_sync_data_mode(&value).to_string())
+            .unwrap_or_else(|| {
+                if bootstrap_uploaded {
+                    GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string()
+                } else {
+                    GITHUB_SYNC_DATA_MODE_AGGREGATE_V3.to_string()
+                }
+            });
         let last_status = self.app_setting_value("github_sync_last_status").await?;
         let last_message = self.app_setting_value("github_sync_last_message").await?;
 
@@ -1559,6 +1884,7 @@ impl TokenScopeRepository {
             repo,
             branch,
             path_prefix,
+            data_mode,
             token_redacted: token.as_deref().map(redact_secret),
             token_configured: token
                 .as_deref()
@@ -1603,7 +1929,8 @@ impl TokenScopeRepository {
         s.day_shards,
         s.last_import_at,
         COALESCE(d.calls, 0) AS calls,
-        COALESCE(d.total_tokens, 0) AS total_tokens
+        COALESCE(d.total_tokens, 0) AS total_tokens,
+        d.sync_data_mode
       FROM shard_summary s
       LEFT JOIN external_dataset d ON d.device_id = s.device_id
       ORDER BY s.last_import_at DESC, s.device_id ASC
@@ -1618,28 +1945,44 @@ impl TokenScopeRepository {
         input: &GitHubSyncSettingsInput,
     ) -> Result<GitHubSyncSettings, sqlx::Error> {
         let now = Local::now().to_rfc3339();
+        let previous = self.get_github_sync_settings().await?;
+        let previous_sync_password = self.app_setting_value("github_sync_password").await?;
+        let owner = input.owner.trim().to_string();
+        let repo = input.repo.trim().to_string();
+        let branch = normalize_non_empty(&input.branch, "main").to_string();
+        let path_prefix = normalize_non_empty(&input.path_prefix, "tokenscope-sync").to_string();
+        let data_mode =
+            normalize_github_sync_data_mode(input.data_mode.as_deref().unwrap_or("")).to_string();
+        let next_sync_password = input
+            .sync_password
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let sync_namespace_changed = previous.owner != owner
+            || previous.repo != repo
+            || previous.branch != branch
+            || previous.path_prefix != path_prefix
+            || previous.data_mode != data_mode
+            || next_sync_password
+                .map(|password| previous_sync_password.as_deref() != Some(password))
+                .unwrap_or(false);
+
         self.upsert_app_setting_value(
             "github_sync_enabled",
             if input.enabled { "true" } else { "false" },
             &now,
         )
         .await?;
-        self.upsert_app_setting_value("github_sync_owner", input.owner.trim(), &now)
+        self.upsert_app_setting_value("github_sync_owner", &owner, &now)
             .await?;
-        self.upsert_app_setting_value("github_sync_repo", input.repo.trim(), &now)
+        self.upsert_app_setting_value("github_sync_repo", &repo, &now)
             .await?;
-        self.upsert_app_setting_value(
-            "github_sync_branch",
-            normalize_non_empty(&input.branch, "main"),
-            &now,
-        )
-        .await?;
-        self.upsert_app_setting_value(
-            "github_sync_path_prefix",
-            normalize_non_empty(&input.path_prefix, "tokenscope-sync"),
-            &now,
-        )
-        .await?;
+        self.upsert_app_setting_value("github_sync_branch", &branch, &now)
+            .await?;
+        self.upsert_app_setting_value("github_sync_path_prefix", &path_prefix, &now)
+            .await?;
+        self.upsert_app_setting_value("github_sync_data_mode", &data_mode, &now)
+            .await?;
         if let Some(token) = input
             .token
             .as_deref()
@@ -1654,6 +1997,10 @@ impl TokenScopeRepository {
             .filter(|value| !value.trim().is_empty())
         {
             self.upsert_app_setting_value("github_sync_password", sync_password, &now)
+                .await?;
+        }
+        if sync_namespace_changed {
+            self.reset_github_sync_state_after_config_change(&now)
                 .await?;
         }
 
@@ -1758,6 +2105,31 @@ impl TokenScopeRepository {
         .await
     }
 
+    pub async fn github_sync_uploaded_day_dates(
+        &self,
+        device_id: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        query(
+            r#"
+      SELECT shard_date
+      FROM github_sync_shard
+      WHERE device_id = ?1
+        AND shard_kind = 'day'
+        AND shard_date IS NOT NULL
+        AND imported_at IS NULL
+      ORDER BY shard_date ASC
+      "#,
+        )
+        .bind(device_id)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .filter_map(|row| row.try_get::<String, _>("shard_date").ok())
+                .collect()
+        })
+    }
+
     pub async fn set_github_sync_bootstrap_uploaded(
         &self,
         uploaded: bool,
@@ -1790,6 +2162,50 @@ impl TokenScopeRepository {
             self.upsert_app_setting_value("github_sync_last_import_at", import_at, &now)
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn reset_github_sync_state_after_config_change(
+        &self,
+        now: &str,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        for (key, value) in [
+            ("github_sync_bootstrap_uploaded", "false"),
+            ("github_sync_last_status", "reset"),
+            (
+                "github_sync_last_message",
+                "GitHub 同步配置已变更，需要重新同步。",
+            ),
+        ] {
+            query(
+                r#"
+          INSERT INTO app_setting (key, value, updated_at)
+          VALUES (?1, ?2, ?3)
+          ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+          "#,
+            )
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        query(
+            r#"
+        DELETE FROM app_setting
+        WHERE key IN ('github_sync_last_upload_at', 'github_sync_last_import_at')
+        "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        query("DELETE FROM github_sync_shard")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
         Ok(())
     }
 
@@ -2356,14 +2772,77 @@ impl TokenScopeRepository {
 
     async fn top_dimensions(
         &self,
-        sql: &str,
+        dimension_type: &str,
+        dimension_expression: &str,
+        non_empty_predicate: &str,
         from: &str,
         to: &str,
         limit: i64,
     ) -> Result<Vec<TopDimensionRow>, sqlx::Error> {
-        query_as::<_, TopDimensionRowSql>(sql)
+        let sql = format!(
+            r#"
+      WITH detail_filtered AS (
+        SELECT c.*
+        FROM llm_call c
+        LEFT JOIN external_dataset d ON d.id = c.origin_dataset_id
+        WHERE c.date_local BETWEEN ?1 AND ?2
+          AND (
+            c.origin_dataset_id IS NULL
+            OR d.sync_data_mode = 'detail_v2'
+          )
+      ),
+      combined AS (
+        SELECT
+          {dimension_expression} AS dimension,
+          COUNT(*) AS calls,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+          COALESCE(cost_currency, 'USD') AS cost_currency,
+          COALESCE(SUM(CASE WHEN latency_ms IS NOT NULL THEN latency_ms ELSE 0 END), 0) AS latency_sum_ms,
+          COALESCE(SUM(CASE WHEN latency_ms IS NOT NULL THEN 1 ELSE 0 END), 0) AS latency_count
+        FROM detail_filtered
+        WHERE {non_empty_predicate}
+        GROUP BY dimension, COALESCE(cost_currency, 'USD')
+        UNION ALL
+        SELECT
+          a.dimension_value AS dimension,
+          COALESCE(SUM(a.calls), 0) AS calls,
+          COALESCE(SUM(a.total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(a.estimated_cost_usd), 0.0) AS estimated_cost_usd,
+          COALESCE(a.cost_currency, 'USD') AS cost_currency,
+          COALESCE(SUM(a.latency_sum_ms), 0) AS latency_sum_ms,
+          COALESCE(SUM(a.latency_count), 0) AS latency_count
+        FROM external_dimension_usage a
+        JOIN external_dataset d ON d.id = a.dataset_id
+        WHERE a.date_local BETWEEN ?1 AND ?2
+          AND d.sync_data_mode = 'aggregate_v3'
+          AND a.dimension_type = ?3
+        GROUP BY a.dimension_value, COALESCE(a.cost_currency, 'USD')
+      )
+      SELECT
+        dimension,
+        COALESCE(SUM(calls), 0) AS calls,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        CASE
+          WHEN COUNT(DISTINCT cost_currency) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
+          ELSE 'MIXED'
+        END AS cost_currency,
+        CASE
+          WHEN COALESCE(SUM(latency_count), 0) = 0 THEN NULL
+          ELSE CAST(SUM(latency_sum_ms) AS REAL) / CAST(SUM(latency_count) AS REAL)
+        END AS avg_latency_ms
+      FROM combined
+      GROUP BY dimension
+      ORDER BY total_tokens DESC, calls DESC, dimension ASC
+      LIMIT ?4
+      "#
+        );
+
+        query_as::<_, TopDimensionRowSql>(&sql)
             .bind(from)
             .bind(to)
+            .bind(dimension_type)
             .bind(limit)
             .fetch_all(&self.pool)
             .await
@@ -2446,6 +2925,20 @@ fn dimension_expression(dimension: &str) -> Result<&'static str, String> {
 
 fn push_call_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, filters: &'a LlmCallFilters) {
     let mut has_filter = false;
+
+    push_filter_prefix(builder, &mut has_filter);
+    builder.push(
+        r#"
+      (
+        origin_dataset_id IS NULL
+        OR origin_dataset_id IN (
+          SELECT id
+          FROM external_dataset
+          WHERE sync_data_mode = 'detail_v2'
+        )
+      )
+      "#,
+    );
 
     if let Some(from) = non_empty(filters.from.as_deref()) {
         push_filter_prefix(builder, &mut has_filter);
@@ -2588,6 +3081,14 @@ async fn distinct_non_empty_values(
       SELECT DISTINCT {column} AS value
       FROM llm_call
       WHERE {column} IS NOT NULL AND {column} <> ''
+        AND (
+          origin_dataset_id IS NULL
+          OR origin_dataset_id IN (
+            SELECT id
+            FROM external_dataset
+            WHERE sync_data_mode = 'detail_v2'
+          )
+        )
       ORDER BY value ASC
       "#
     );
@@ -2604,6 +3105,14 @@ async fn distinct_non_empty_models(pool: &SqlitePool) -> Result<Vec<String>, sql
       SELECT DISTINCT COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, '')) AS value
       FROM llm_call
       WHERE COALESCE(NULLIF(model_response, ''), NULLIF(model_requested, '')) IS NOT NULL
+        AND (
+          origin_dataset_id IS NULL
+          OR origin_dataset_id IN (
+            SELECT id
+            FROM external_dataset
+            WHERE sync_data_mode = 'detail_v2'
+          )
+        )
       ORDER BY value ASC
       "#,
     )
@@ -2612,13 +3121,56 @@ async fn distinct_non_empty_models(pool: &SqlitePool) -> Result<Vec<String>, sql
     .map(|rows| rows.into_iter().map(|row| row.value).collect())
 }
 
-fn daily_grouped_sql(dimension_expression: &str) -> String {
+fn daily_grouped_sql(dimension_type: &str, dimension_expression: &str) -> String {
     format!(
         r#"
+    WITH detail_filtered AS (
+      SELECT c.*
+      FROM llm_call c
+      LEFT JOIN external_dataset d ON d.id = c.origin_dataset_id
+      WHERE c.date_local BETWEEN ?1 AND ?2
+        AND (
+          c.origin_dataset_id IS NULL
+          OR d.sync_data_mode = 'detail_v2'
+        )
+    ),
+    combined AS (
+      SELECT
+        date_local,
+        {dimension_expression} AS dimension,
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+        COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        COALESCE(cost_currency, 'USD') AS cost_currency
+      FROM detail_filtered
+      GROUP BY date_local, dimension, COALESCE(cost_currency, 'USD')
+      UNION ALL
+      SELECT
+        a.date_local,
+        a.dimension_value AS dimension,
+        COALESCE(SUM(a.calls), 0) AS calls,
+        COALESCE(SUM(a.input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(a.output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(a.cached_input_tokens), 0) AS cached_input_tokens,
+        COALESCE(SUM(a.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+        COALESCE(SUM(a.total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(a.estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        COALESCE(a.cost_currency, 'USD') AS cost_currency
+      FROM external_dimension_usage a
+      JOIN external_dataset d ON d.id = a.dataset_id
+      WHERE a.date_local BETWEEN ?1 AND ?2
+        AND d.sync_data_mode = 'aggregate_v3'
+        AND a.dimension_type = '{dimension_type}'
+      GROUP BY a.date_local, a.dimension_value, COALESCE(a.cost_currency, 'USD')
+    )
     SELECT
       date_local,
-      {dimension_expression} AS dimension,
-      COUNT(*) AS calls,
+      dimension,
+      COALESCE(SUM(calls), 0) AS calls,
       COALESCE(SUM(input_tokens), 0) AS input_tokens,
       COALESCE(SUM(output_tokens), 0) AS output_tokens,
       COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
@@ -2626,11 +3178,10 @@ fn daily_grouped_sql(dimension_expression: &str) -> String {
       COALESCE(SUM(total_tokens), 0) AS total_tokens,
       COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
       CASE
-        WHEN COUNT(DISTINCT COALESCE(cost_currency, 'USD')) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
+        WHEN COUNT(DISTINCT cost_currency) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
         ELSE 'MIXED'
       END AS cost_currency
-    FROM llm_call
-    WHERE date_local BETWEEN ?1 AND ?2
+    FROM combined
     GROUP BY date_local, dimension
     ORDER BY date_local ASC, dimension ASC
     "#
@@ -3088,6 +3639,301 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
+fn insert_llm_call_query<'q>(call: &'q NewLlmCall) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+    query(INSERT_LLM_CALL_SQL)
+        .bind(&call.id)
+        .bind(&call.started_at)
+        .bind(&call.ended_at)
+        .bind(&call.date_local)
+        .bind(&call.provider)
+        .bind(&call.provider_config_id)
+        .bind(&call.api_type)
+        .bind(&call.model_requested)
+        .bind(&call.model_response)
+        .bind(&call.agent_id)
+        .bind(&call.agent_name)
+        .bind(&call.agent_run_id)
+        .bind(&call.workflow_id)
+        .bind(&call.workflow_step)
+        .bind(&call.session_id)
+        .bind(&call.trace_id)
+        .bind(&call.span_id)
+        .bind(&call.parent_span_id)
+        .bind(&call.project_id)
+        .bind(&call.user_id)
+        .bind(&call.environment)
+        .bind(&call.feature)
+        .bind(call.input_tokens)
+        .bind(call.output_tokens)
+        .bind(call.cached_input_tokens)
+        .bind(call.cache_write_input_tokens)
+        .bind(call.reasoning_output_tokens)
+        .bind(call.audio_input_tokens)
+        .bind(call.audio_output_tokens)
+        .bind(call.image_input_tokens)
+        .bind(call.image_output_tokens)
+        .bind(call.total_tokens)
+        .bind(call.total_billable_tokens)
+        .bind(call.request_count)
+        .bind(call.tool_call_count)
+        .bind(call.retry_count)
+        .bind(call.latency_ms)
+        .bind(call.http_status)
+        .bind(&call.status)
+        .bind(&call.error_type)
+        .bind(&call.error_message)
+        .bind(call.estimated_cost_usd)
+        .bind(&call.cost_currency)
+        .bind(call.provider_reported_cost_usd)
+        .bind(call.reconciled_cost_usd)
+        .bind(&call.cost_source)
+        .bind(&call.usage_source)
+        .bind(&call.raw_usage_json)
+        .bind(&call.raw_response_json)
+        .bind(&call.request_hash)
+        .bind(&call.response_hash)
+        .bind(&call.prompt_template_id)
+        .bind(&call.created_at)
+}
+
+async fn upsert_external_dataset_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    input: &ExternalDatasetInput,
+) -> Result<(), sqlx::Error> {
+    query(
+        r#"
+      INSERT INTO external_dataset (
+        id,
+        device_id,
+        device_name,
+        package_version,
+        source_path,
+        imported_at,
+        updated_at,
+        calls,
+        total_tokens,
+        estimated_cost_usd,
+        cost_currency,
+        sync_data_mode
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+      ON CONFLICT(id) DO UPDATE SET
+        device_id = excluded.device_id,
+        device_name = excluded.device_name,
+        package_version = excluded.package_version,
+        source_path = excluded.source_path,
+        imported_at = excluded.imported_at,
+        updated_at = excluded.updated_at,
+        calls = excluded.calls,
+        total_tokens = excluded.total_tokens,
+        estimated_cost_usd = excluded.estimated_cost_usd,
+        cost_currency = excluded.cost_currency,
+        sync_data_mode = excluded.sync_data_mode
+      "#,
+    )
+    .bind(&input.id)
+    .bind(&input.device_id)
+    .bind(&input.device_name)
+    .bind(input.package_version)
+    .bind(&input.source_path)
+    .bind(&input.imported_at)
+    .bind(&input.updated_at)
+    .bind(input.calls)
+    .bind(input.total_tokens)
+    .bind(input.estimated_cost_usd)
+    .bind(&input.cost_currency)
+    .bind(normalize_github_sync_data_mode(&input.sync_data_mode))
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn insert_external_daily_usage_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    dataset_id: &str,
+    row: &ExternalUsageAggregateInput,
+) -> Result<(), sqlx::Error> {
+    query(
+        r#"
+      INSERT INTO external_daily_usage (
+        dataset_id,
+        date_local,
+        calls,
+        success_calls,
+        error_calls,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+        cost_currency,
+        latency_sum_ms,
+        latency_count
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+      ON CONFLICT(dataset_id, date_local) DO UPDATE SET
+        calls = excluded.calls,
+        success_calls = excluded.success_calls,
+        error_calls = excluded.error_calls,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cached_input_tokens = excluded.cached_input_tokens,
+        cache_write_input_tokens = excluded.cache_write_input_tokens,
+        reasoning_output_tokens = excluded.reasoning_output_tokens,
+        total_tokens = excluded.total_tokens,
+        estimated_cost_usd = excluded.estimated_cost_usd,
+        cost_currency = excluded.cost_currency,
+        latency_sum_ms = excluded.latency_sum_ms,
+        latency_count = excluded.latency_count
+      "#,
+    )
+    .bind(dataset_id)
+    .bind(&row.date_local)
+    .bind(row.calls)
+    .bind(row.success_calls)
+    .bind(row.error_calls)
+    .bind(row.input_tokens)
+    .bind(row.output_tokens)
+    .bind(row.cached_input_tokens)
+    .bind(row.cache_write_input_tokens)
+    .bind(row.reasoning_output_tokens)
+    .bind(row.total_tokens)
+    .bind(row.estimated_cost_usd)
+    .bind(&row.cost_currency)
+    .bind(row.latency_sum_ms)
+    .bind(row.latency_count)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn insert_external_dimension_usage_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    dataset_id: &str,
+    row: &ExternalDimensionUsageAggregateInput,
+) -> Result<(), sqlx::Error> {
+    query(
+        r#"
+      INSERT INTO external_dimension_usage (
+        dataset_id,
+        date_local,
+        dimension_type,
+        dimension_value,
+        dimension_label,
+        calls,
+        success_calls,
+        error_calls,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+        cost_currency,
+        latency_sum_ms,
+        latency_count
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+      ON CONFLICT(dataset_id, date_local, dimension_type, dimension_value) DO UPDATE SET
+        dimension_label = excluded.dimension_label,
+        calls = excluded.calls,
+        success_calls = excluded.success_calls,
+        error_calls = excluded.error_calls,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cached_input_tokens = excluded.cached_input_tokens,
+        cache_write_input_tokens = excluded.cache_write_input_tokens,
+        reasoning_output_tokens = excluded.reasoning_output_tokens,
+        total_tokens = excluded.total_tokens,
+        estimated_cost_usd = excluded.estimated_cost_usd,
+        cost_currency = excluded.cost_currency,
+        latency_sum_ms = excluded.latency_sum_ms,
+        latency_count = excluded.latency_count
+      "#,
+    )
+    .bind(dataset_id)
+    .bind(&row.date_local)
+    .bind(&row.dimension_type)
+    .bind(&row.dimension_value)
+    .bind(&row.dimension_label)
+    .bind(row.calls)
+    .bind(row.success_calls)
+    .bind(row.error_calls)
+    .bind(row.input_tokens)
+    .bind(row.output_tokens)
+    .bind(row.cached_input_tokens)
+    .bind(row.cache_write_input_tokens)
+    .bind(row.reasoning_output_tokens)
+    .bind(row.total_tokens)
+    .bind(row.estimated_cost_usd)
+    .bind(&row.cost_currency)
+    .bind(row.latency_sum_ms)
+    .bind(row.latency_count)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn refresh_external_aggregate_dataset_summary_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    input: &ExternalDatasetInput,
+) -> Result<(), sqlx::Error> {
+    let summary = query(
+        r#"
+      SELECT
+        COALESCE(SUM(calls), 0) AS calls,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+        CASE
+          WHEN COUNT(*) = 0 THEN ?2
+          WHEN COUNT(DISTINCT COALESCE(cost_currency, 'USD')) = 1 THEN COALESCE(MAX(cost_currency), 'USD')
+          ELSE 'MIXED'
+        END AS cost_currency
+      FROM external_daily_usage
+      WHERE dataset_id = ?1
+      "#,
+    )
+    .bind(&input.id)
+    .bind(&input.cost_currency)
+    .fetch_one(&mut **tx)
+    .await?;
+    query(
+        r#"
+      UPDATE external_dataset
+      SET
+        calls = ?1,
+        total_tokens = ?2,
+        estimated_cost_usd = ?3,
+        cost_currency = ?4,
+        sync_data_mode = ?5,
+        updated_at = ?6
+      WHERE id = ?7
+      "#,
+    )
+    .bind(summary.try_get::<i64, _>("calls")?)
+    .bind(summary.try_get::<i64, _>("total_tokens")?)
+    .bind(summary.try_get::<f64, _>("estimated_cost_usd")?)
+    .bind(summary.try_get::<String, _>("cost_currency")?)
+    .bind(normalize_github_sync_data_mode(&input.sync_data_mode))
+    .bind(&input.updated_at)
+    .bind(&input.id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+fn normalize_github_sync_data_mode(value: &str) -> &str {
+    match value.trim() {
+        GITHUB_SYNC_DATA_MODE_DETAIL_V2 => GITHUB_SYNC_DATA_MODE_DETAIL_V2,
+        GITHUB_SYNC_DATA_MODE_AGGREGATE_V3 => GITHUB_SYNC_DATA_MODE_AGGREGATE_V3,
+        _ => GITHUB_SYNC_DATA_MODE_AGGREGATE_V3,
+    }
+}
+
 fn normalize_non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -3212,8 +4058,9 @@ fn normalize_lf_to_crlf(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettingsInput, ExternalDatasetInput, GitHubSyncShardStateInput, LlmCallFilters,
-        ProviderConfigInput, TokenPulseWindowPosition, TokenScopeRepository,
+        AppSettingsInput, CustomImporterProfileInput, ExternalDatasetInput,
+        GitHubSyncShardStateInput, LlmCallFilters, ProviderConfigInput, TokenPulseWindowPosition,
+        TokenScopeRepository, GITHUB_SYNC_DATA_MODE_AGGREGATE_V3, GITHUB_SYNC_DATA_MODE_DETAIL_V2,
     };
     use crate::pricing::PricingRuleInput;
     use chrono::NaiveDate;
@@ -3235,6 +4082,61 @@ mod tests {
         assert_eq!(summary.estimated_cost_usd, 0.0);
         assert_eq!(summary.error_rate, 0.0);
         assert_eq!(summary.avg_latency_ms, None);
+    }
+
+    #[tokio::test]
+    async fn dashboard_queries_merge_external_aggregate_v3_usage() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+        insert_minimal_call_with_date(
+            &repository,
+            "local-aggregate-peer",
+            "codex",
+            "2026-06-05T09:00:00+08:00",
+            "2026-06-05",
+            100,
+            0.01,
+        )
+        .await;
+        insert_external_aggregate_usage(
+            &repository,
+            "device-remote-aggregate",
+            "2026-06-05",
+            "provider",
+            "codex",
+            2,
+            450,
+            0.045,
+        )
+        .await;
+
+        let summary = repository
+            .dashboard_summary("2026-06-05", "2026-06-05")
+            .await
+            .expect("summary reads aggregate");
+        let daily = repository
+            .daily_usage_series("2026-06-05", "2026-06-05", None)
+            .await
+            .expect("daily series reads aggregate");
+        let top_providers = repository
+            .top_providers("2026-06-05", "2026-06-05", 5)
+            .await
+            .expect("top providers read aggregate");
+
+        assert_eq!(summary.calls, 3);
+        assert_eq!(summary.total_tokens, 550);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.output_tokens, 350);
+        assert_eq!(summary.top_model, None);
+        assert_eq!(daily.len(), 1);
+        assert_eq!(daily[0].calls, 3);
+        assert_eq!(daily[0].total_tokens, 550);
+        assert_eq!(top_providers.len(), 1);
+        assert_eq!(top_providers[0].dimension, "codex");
+        assert_eq!(top_providers[0].calls, 3);
+        assert_eq!(top_providers[0].total_tokens, 550);
     }
 
     #[tokio::test]
@@ -3691,6 +4593,73 @@ mod tests {
         assert_eq!(hermes.imported_calls, 1);
         assert_eq!(hermes.total_tokens, 500);
         assert_eq!(hermes.estimated_cost_usd, 0.25);
+    }
+
+    #[tokio::test]
+    async fn deleting_custom_importer_profile_removes_imported_rows_for_source() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+        let profile = repository
+            .upsert_custom_importer_profile(&CustomImporterProfileInput {
+                id: Some("profile-custom".to_string()),
+                name: "Custom Agent".to_string(),
+                enabled: true,
+                source_key: "custom:test-agent".to_string(),
+                database_path: "source.sqlite".to_string(),
+                import_sql: "SELECT id, started_at FROM calls".to_string(),
+                mappings_json:
+                    r#"{"external_id":"id","started_at":"started_at","ended_at":null,"date_local":null,"provider":null,"model":null,"model_requested":null,"model_response":null,"agent_id":null,"agent_name":null,"session_id":null,"project_id":null,"workflow_id":null,"workflow_step":null,"input_tokens":null,"output_tokens":null,"cached_input_tokens":null,"cache_write_input_tokens":null,"reasoning_output_tokens":null,"total_tokens":null,"estimated_cost_usd":null,"cost_currency":null}"#
+                        .to_string(),
+            })
+            .await
+            .expect("profile saved");
+        insert_minimal_call(
+            &repository,
+            "custom-call-1",
+            "custom",
+            "2026-05-30T12:00:00+08:00",
+            300,
+            0.0,
+        )
+        .await;
+        insert_import_map(
+            &repository,
+            &profile.source_key,
+            "external-1",
+            "custom-call-1",
+            "2026-05-30T12:30:00+08:00",
+        )
+        .await;
+
+        assert!(repository
+            .delete_custom_importer_profile(&profile.id)
+            .await
+            .expect("profile deletes"));
+
+        let call_count: i64 = query("SELECT COUNT(*) AS count FROM llm_call WHERE id = ?1")
+            .bind("custom-call-1")
+            .fetch_one(repository.pool())
+            .await
+            .expect("call count query succeeds")
+            .try_get("count")
+            .expect("count column exists");
+        let map_count: i64 =
+            query("SELECT COUNT(*) AS count FROM agent_import_map WHERE source = ?1")
+                .bind(&profile.source_key)
+                .fetch_one(repository.pool())
+                .await
+                .expect("map count query succeeds")
+                .try_get("count")
+                .expect("count column exists");
+        assert_eq!(call_count, 0);
+        assert_eq!(map_count, 0);
+        assert!(repository
+            .get_custom_importer_profile(&profile.id)
+            .await
+            .expect("profile lookup succeeds")
+            .is_none());
     }
 
     #[tokio::test]
@@ -4323,6 +5292,7 @@ mod tests {
                 repo: "tokenscope-sync".to_string(),
                 branch: "main".to_string(),
                 path_prefix: "tokenscope-sync".to_string(),
+                data_mode: None,
                 token: Some("ghp_secret_token_value".to_string()),
                 sync_password: Some("sync-password".to_string()),
             })
@@ -4331,12 +5301,104 @@ mod tests {
 
         assert!(saved.token_configured);
         assert!(saved.sync_password_configured);
+        assert_eq!(saved.data_mode, GITHUB_SYNC_DATA_MODE_AGGREGATE_V3);
         assert_eq!(saved.token_redacted.as_deref(), Some("ghp_...alue"));
         assert!(repository
             .github_sync_secret("token")
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn github_sync_settings_keep_legacy_mode_when_old_bootstrap_state_exists() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .expect("legacy bootstrap flag records");
+
+        let settings = repository
+            .get_github_sync_settings()
+            .await
+            .expect("settings read");
+
+        assert_eq!(settings.data_mode, GITHUB_SYNC_DATA_MODE_DETAIL_V2);
+    }
+
+    #[tokio::test]
+    async fn github_sync_settings_namespace_change_resets_cached_shards() {
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("in-memory database connects");
+        repository.migrate().await.expect("migrations run");
+        repository
+            .save_github_sync_settings(&super::GitHubSyncSettingsInput {
+                enabled: true,
+                owner: "rick".to_string(),
+                repo: "tokenscope-sync".to_string(),
+                branch: "main".to_string(),
+                path_prefix: "tokenscope-sync".to_string(),
+                data_mode: None,
+                token: Some("ghp_secret_token_value".to_string()),
+                sync_password: Some("sync-password".to_string()),
+            })
+            .await
+            .expect("settings save");
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .expect("bootstrap flag records");
+        repository
+            .record_github_sync_run(
+                "success",
+                "GitHub 同步完成",
+                Some("2026-06-05T10:00:00+08:00"),
+                Some("2026-06-05T10:00:00+08:00"),
+            )
+            .await
+            .expect("sync run records");
+        repository
+            .record_github_sync_shard(&super::GitHubSyncShardStateInput {
+                device_id: "device-a".to_string(),
+                shard_kind: "day".to_string(),
+                shard_date: Some("2026-06-05".to_string()),
+                content_hash: "abc123".to_string(),
+                github_blob_sha: Some("blob-abc123".to_string()),
+                github_path:
+                    "tokenscope-sync/v1/devices/device-a/days/2026-06-05.tokenscope.zst.enc"
+                        .to_string(),
+                imported_at: None,
+            })
+            .await
+            .expect("shard records");
+
+        let saved = repository
+            .save_github_sync_settings(&super::GitHubSyncSettingsInput {
+                enabled: true,
+                owner: "rick".to_string(),
+                repo: "other-sync".to_string(),
+                branch: "main".to_string(),
+                path_prefix: "tokenscope-sync".to_string(),
+                data_mode: None,
+                token: None,
+                sync_password: None,
+            })
+            .await
+            .expect("settings save");
+
+        assert!(!saved.bootstrap_uploaded);
+        assert_eq!(saved.last_status.as_deref(), Some("reset"));
+        assert!(saved.last_upload_at.is_none());
+        assert!(saved.last_import_at.is_none());
+        assert!(repository
+            .github_sync_shard("device-a", "day", Some("2026-06-05"))
+            .await
+            .expect("shard lookup succeeds")
+            .is_none());
     }
 
     #[tokio::test]
@@ -4432,6 +5494,7 @@ mod tests {
                 total_tokens: 3456,
                 estimated_cost_usd: 0.0,
                 cost_currency: "USD".to_string(),
+                sync_data_mode: GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string(),
             })
             .await
             .expect("external dataset records");
@@ -5083,6 +6146,120 @@ mod tests {
         .execute(repository.pool())
         .await
         .expect("external dataset call inserted");
+    }
+
+    async fn insert_external_aggregate_usage(
+        repository: &TokenScopeRepository,
+        dataset_id: &str,
+        date_local: &str,
+        dimension_type: &str,
+        dimension_value: &str,
+        calls: i64,
+        total_tokens: i64,
+        estimated_cost_usd: f64,
+    ) {
+        query(
+            r#"
+      INSERT INTO external_dataset (
+        id,
+        device_id,
+        device_name,
+        package_version,
+        source_path,
+        imported_at,
+        updated_at,
+        calls,
+        total_tokens,
+        estimated_cost_usd,
+        cost_currency,
+        sync_data_mode
+      ) VALUES (
+        ?1,
+        'remote-aggregate',
+        'Remote Aggregate',
+        3,
+        'github-sync:day',
+        '2026-06-05T12:00:00+08:00',
+        '2026-06-05T12:00:00+08:00',
+        ?2,
+        ?3,
+        ?4,
+        'USD',
+        ?5
+      )
+      "#,
+        )
+        .bind(dataset_id)
+        .bind(calls)
+        .bind(total_tokens)
+        .bind(estimated_cost_usd)
+        .bind(GITHUB_SYNC_DATA_MODE_AGGREGATE_V3)
+        .execute(repository.pool())
+        .await
+        .expect("aggregate dataset inserted");
+        query(
+            r#"
+      INSERT INTO external_daily_usage (
+        dataset_id,
+        date_local,
+        calls,
+        success_calls,
+        error_calls,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+        cost_currency,
+        latency_sum_ms,
+        latency_count
+      ) VALUES (?1, ?2, ?3, ?3, 0, 100, ?4 - 100, 20, 0, 30, ?4, ?5, 'USD', 1000, ?3)
+      "#,
+        )
+        .bind(dataset_id)
+        .bind(date_local)
+        .bind(calls)
+        .bind(total_tokens)
+        .bind(estimated_cost_usd)
+        .execute(repository.pool())
+        .await
+        .expect("aggregate daily inserted");
+        query(
+            r#"
+      INSERT INTO external_dimension_usage (
+        dataset_id,
+        date_local,
+        dimension_type,
+        dimension_value,
+        dimension_label,
+        calls,
+        success_calls,
+        error_calls,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+        cost_currency,
+        latency_sum_ms,
+        latency_count
+      ) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?5, 0, 100, ?6 - 100, 20, 0, 30, ?6, ?7, 'USD', 1000, ?5)
+      "#,
+        )
+        .bind(dataset_id)
+        .bind(date_local)
+        .bind(dimension_type)
+        .bind(dimension_value)
+        .bind(calls)
+        .bind(total_tokens)
+        .bind(estimated_cost_usd)
+        .execute(repository.pool())
+        .await
+        .expect("aggregate dimension inserted");
     }
 
     async fn insert_filterable_call(

@@ -29,6 +29,7 @@ import {
   listAgentSources,
   seedDemoData,
 } from "../services/dashboard";
+import { appUpdateVersionRange } from "../services/appUpdateState";
 import type {
   AgentSourceSummary,
   AppUpdateInfo,
@@ -439,6 +440,8 @@ export function App() {
     appUpdateInfo.body ||
     t("发现新版本，可以下载并安装。");
   const appUpdateDateLabel = formatDateTime(appUpdateInfo.date, t("无"));
+  const appUpdateVersionLabel =
+    appUpdateVersionRange(appUpdateInfo.current_version, appUpdateInfo.version) ?? t("可更新");
 
   return (
     <main className="app-frame">
@@ -480,7 +483,7 @@ export function App() {
             <div className="update-status-popover" id="update-status-popover" role="status">
               <div>
                 <span>{t("可用版本")}</span>
-                <strong>{appUpdateInfo.version ?? t("可更新")}</strong>
+                <strong>{appUpdateVersionLabel}</strong>
               </div>
               <div>
                 <span>{t("发布时间")}</span>
@@ -693,7 +696,6 @@ export function App() {
             isSeedLoading={isLoading}
             isSyncing={isSyncing}
             onSeedDemoData={handleSeed}
-            onSyncLocalData={handleSyncLocalData}
           />
         ) : null}
       </section>

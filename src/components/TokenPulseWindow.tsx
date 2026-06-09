@@ -288,21 +288,34 @@ function formatCodexMiniCountdown(limit: CodexUsageLimitWindow, nowMs: number) {
   return `${totalMinutes}m`;
 }
 
+function getDisplayedCodexUsageLimitWindow(
+  limit: CodexUsageLimitWindow,
+  nowMs: number,
+): CodexUsageLimitWindow {
+  if (!limit.resets_at || limit.resets_at * 1000 > nowMs) {
+    return limit;
+  }
+
+  return { ...limit, used_percent: 0, remaining_percent: 100 };
+}
+
 function buildCodexUsageLimitWindowViewModel(
   limit: CodexUsageLimitWindow,
   tone: CodexUsageLimitWindowViewModel["tone"],
   locale: string,
   nowMs: number,
 ): CodexUsageLimitWindowViewModel {
+  const displayedLimit = getDisplayedCodexUsageLimitWindow(limit, nowMs);
+
   return {
-    label: formatCodexWindowLabel(limit.window_minutes),
-    miniLabel: formatCodexMiniCountdown(limit, nowMs),
-    remainingLabel: formatCodexPercent(limit.remaining_percent, locale),
-    resetLabel: formatCodexResetLabel(limit, locale),
+    label: formatCodexWindowLabel(displayedLimit.window_minutes),
+    miniLabel: formatCodexMiniCountdown(displayedLimit, nowMs),
+    remainingLabel: formatCodexPercent(displayedLimit.remaining_percent, locale),
+    resetLabel: formatCodexResetLabel(displayedLimit, locale),
     tone,
-    usedLabel: `已用 ${formatCodexPercent(limit.used_percent, locale)}`,
-    usedPercent: Math.max(0, Math.min(100, limit.used_percent)),
-    remainingPercent: Math.max(0, Math.min(100, limit.remaining_percent)),
+    usedLabel: `已用 ${formatCodexPercent(displayedLimit.used_percent, locale)}`,
+    usedPercent: Math.max(0, Math.min(100, displayedLimit.used_percent)),
+    remainingPercent: Math.max(0, Math.min(100, displayedLimit.remaining_percent)),
   };
 }
 
@@ -526,12 +539,10 @@ function useCodexUsageLimitSnapshot(enabled: boolean) {
     try {
       const nextSnapshot = await getCodexUsageLimits();
       if (isMountedRef.current) {
-        setSnapshot(nextSnapshot);
+        setSnapshot((previousSnapshot) => nextSnapshot ?? previousSnapshot);
       }
     } catch {
-      if (isMountedRef.current) {
-        setSnapshot(null);
-      }
+      // Keep the last usable snapshot visible while Codex has not emitted a fresh one.
     }
   }, [enabled]);
 

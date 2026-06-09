@@ -4,7 +4,7 @@ use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{query, query_as};
+use sqlx::{query, query_as, Row};
 
 use crate::db::{NewLlmCall, TokenScopeRepository};
 
@@ -119,12 +119,19 @@ pub async fn import_hermes_sessions_from_path_with_scope(
     let mut imported = 0;
     let mut skipped = 0;
     for row in rows {
+        let call = hermes_session_to_call(&row);
         if has_imported(repository, &row.id).await? {
+            if should_refresh_imported_call(repository, &call).await? {
+                repository.insert_llm_call(&call).await?;
+                record_import(repository, &row.id, &call.id).await?;
+                imported += 1;
+                continue;
+            }
+
             skipped += 1;
             continue;
         }
 
-        let call = hermes_session_to_call(&row);
         repository.insert_llm_call(&call).await?;
         record_import(repository, &row.id, &call.id).await?;
         imported += 1;
@@ -157,6 +164,68 @@ async fn has_imported(
     Ok(existing.is_some())
 }
 
+async fn should_refresh_imported_call(
+    repository: &TokenScopeRepository,
+    call: &NewLlmCall,
+) -> Result<bool, sqlx::Error> {
+    let existing = query(
+        r#"
+    SELECT
+      started_at,
+      ended_at,
+      date_local,
+      model_requested,
+      model_response,
+      input_tokens,
+      output_tokens,
+      cached_input_tokens,
+      cache_write_input_tokens,
+      reasoning_output_tokens,
+      total_tokens,
+      estimated_cost_usd,
+      cost_currency
+    FROM llm_call
+    WHERE id = ?1
+    LIMIT 1
+    "#,
+    )
+    .bind(&call.id)
+    .fetch_optional(repository.pool())
+    .await?;
+
+    let Some(existing) = existing else {
+        return Ok(true);
+    };
+
+    let started_at = existing.try_get::<String, _>("started_at")?;
+    let ended_at = existing.try_get::<Option<String>, _>("ended_at")?;
+    let date_local = existing.try_get::<String, _>("date_local")?;
+    let model_requested = existing.try_get::<Option<String>, _>("model_requested")?;
+    let model_response = existing.try_get::<Option<String>, _>("model_response")?;
+    let input_tokens = existing.try_get::<i64, _>("input_tokens")?;
+    let output_tokens = existing.try_get::<i64, _>("output_tokens")?;
+    let cached_input_tokens = existing.try_get::<i64, _>("cached_input_tokens")?;
+    let cache_write_input_tokens = existing.try_get::<i64, _>("cache_write_input_tokens")?;
+    let reasoning_output_tokens = existing.try_get::<i64, _>("reasoning_output_tokens")?;
+    let total_tokens = existing.try_get::<i64, _>("total_tokens")?;
+    let estimated_cost_usd = existing.try_get::<f64, _>("estimated_cost_usd")?;
+    let cost_currency = existing.try_get::<String, _>("cost_currency")?;
+
+    Ok(started_at != call.started_at
+        || ended_at != call.ended_at
+        || date_local != call.date_local
+        || model_requested != call.model_requested
+        || model_response != call.model_response
+        || input_tokens != call.input_tokens
+        || output_tokens != call.output_tokens
+        || cached_input_tokens != call.cached_input_tokens
+        || cache_write_input_tokens != call.cache_write_input_tokens
+        || reasoning_output_tokens != call.reasoning_output_tokens
+        || total_tokens != call.total_tokens
+        || (estimated_cost_usd - call.estimated_cost_usd).abs() > f64::EPSILON
+        || cost_currency != call.cost_currency)
+}
+
 async fn record_import(
     repository: &TokenScopeRepository,
     external_id: &str,
@@ -170,6 +239,9 @@ async fn record_import(
       llm_call_id,
       imported_at
     ) VALUES (?1, ?2, ?3, ?4)
+    ON CONFLICT(source, external_id) DO UPDATE SET
+      llm_call_id = excluded.llm_call_id,
+      imported_at = excluded.imported_at
     "#,
     )
     .bind(HERMES_SOURCE)
@@ -404,6 +476,56 @@ mod tests {
         assert_eq!(first.skipped, 0);
         assert_eq!(second.imported, 0);
         assert_eq!(second.skipped, 1);
+    }
+
+    #[tokio::test]
+    async fn import_hermes_sessions_refreshes_existing_rows_when_source_changes() {
+        let source_path = create_hermes_state_db().await;
+        let repository = TokenScopeRepository::connect_in_memory()
+            .await
+            .expect("target repository connects");
+        repository.migrate().await.expect("target migrations run");
+        import_hermes_sessions_from_path(&repository, &source_path)
+            .await
+            .expect("first import succeeds");
+        let options = SqliteConnectOptions::new().filename(&source_path);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("source db reconnects");
+        query(
+            r#"
+      UPDATE sessions
+      SET input_tokens = 150,
+          actual_cost_usd = 0.45
+      WHERE id = 'session_1'
+      "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("source session updated");
+        pool.close().await;
+
+        let second = import_hermes_sessions_from_path(&repository, &source_path)
+            .await
+            .expect("second import succeeds");
+
+        assert_eq!(second.imported, 1);
+        assert_eq!(second.skipped, 0);
+        let row = query(
+            r#"
+      SELECT input_tokens, total_tokens, estimated_cost_usd
+      FROM llm_call
+      WHERE id = 'hermes-session-session_1'
+      "#,
+        )
+        .fetch_one(repository.pool())
+        .await
+        .expect("imported call exists");
+        assert_eq!(row.get::<i64, _>("input_tokens"), 150);
+        assert_eq!(row.get::<i64, _>("total_tokens"), 245);
+        assert_eq!(row.get::<f64, _>("estimated_cost_usd"), 0.45);
     }
 
     #[tokio::test]

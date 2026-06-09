@@ -25,6 +25,7 @@ const defaultDraft: GitHubSyncSettingsInput = {
   repo: "",
   branch: "main",
   path_prefix: "tokenscope-sync",
+  data_mode: "aggregate_v3",
   token: "",
   sync_password: "",
 };
@@ -66,9 +67,17 @@ function draftFromSettings(settings: GitHubSyncSettings): GitHubSyncSettingsInpu
     repo: settings.repo,
     branch: settings.branch,
     path_prefix: settings.path_prefix,
+    data_mode: settings.data_mode,
     token: "",
     sync_password: "",
   };
+}
+
+function formatGitHubSyncDataMode(
+  dataMode: GitHubSyncSettingsInput["data_mode"] | null | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  return dataMode === "detail_v2" ? t("明细同步（V2）") : t("统计同步（V3）");
 }
 
 function formatElapsedSeconds(seconds: number) {
@@ -468,6 +477,19 @@ export function GitHubSyncPanel({ isAppUpdateBusy, onNotice }: GitHubSyncPanelPr
           />
         </label>
         <label className="field">
+          <span>{t("同步模式")}</span>
+          <select
+            disabled={actionsDisabled}
+            onChange={(event) =>
+              updateDraft("data_mode", event.target.value as GitHubSyncSettingsInput["data_mode"])
+            }
+            value={draft.data_mode}
+          >
+            <option value="aggregate_v3">{t("统计同步（推荐）")}</option>
+            <option value="detail_v2">{t("明细同步（兼容旧行为）")}</option>
+          </select>
+        </label>
+        <label className="field">
           <span>personal access token</span>
           <input
             disabled={actionsDisabled}
@@ -618,6 +640,7 @@ function GitHubSyncRemoteDeviceList({
             <span role="columnheader">{t("bootstrap 分片")}</span>
             <span role="columnheader">{t("day 分片")}</span>
             <span role="columnheader">{t("最后导入")}</span>
+            <span role="columnheader">{t("模式")}</span>
             <span role="columnheader">{t("调用数")}</span>
             <span role="columnheader">Token</span>
             <span role="columnheader">{t("操作")}</span>
@@ -631,6 +654,7 @@ function GitHubSyncRemoteDeviceList({
               <span role="cell">{formatInteger(device.bootstrap_shards, numberLocale)}</span>
               <span role="cell">{formatInteger(device.day_shards, numberLocale)}</span>
               <span role="cell">{formatDateTime(device.last_import_at, t("无"))}</span>
+              <span role="cell">{formatGitHubSyncDataMode(device.sync_data_mode, t)}</span>
               <span role="cell">{formatInteger(device.calls, numberLocale)}</span>
               <span role="cell">{formatInteger(device.total_tokens, numberLocale)}</span>
               <span className="remote-device-actions" role="cell">

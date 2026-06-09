@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub const GITHUB_SYNC_DATA_MODE_AGGREGATE_V3: &str = "aggregate_v3";
+pub const GITHUB_SYNC_DATA_MODE_DETAIL_V2: &str = "detail_v2";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardSummary {
     pub total_tokens: i64,
@@ -92,6 +95,7 @@ pub struct ExternalDataset {
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
     pub cost_currency: String,
+    pub sync_data_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +111,7 @@ pub struct ExternalDatasetInput {
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
     pub cost_currency: String,
+    pub sync_data_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +119,45 @@ pub struct ExternalDatasetImportCall {
     pub source_key: String,
     pub external_id: String,
     pub call: NewLlmCall,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalUsageAggregateInput {
+    pub date_local: String,
+    pub calls: i64,
+    pub success_calls: i64,
+    pub error_calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub cache_write_input_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub cost_currency: String,
+    pub latency_sum_ms: i64,
+    pub latency_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalDimensionUsageAggregateInput {
+    pub date_local: String,
+    pub dimension_type: String,
+    pub dimension_value: String,
+    pub dimension_label: Option<String>,
+    pub calls: i64,
+    pub success_calls: i64,
+    pub error_calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub cache_write_input_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub cost_currency: String,
+    pub latency_sum_ms: i64,
+    pub latency_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,6 +330,7 @@ pub struct GitHubSyncSettings {
     pub repo: String,
     pub branch: String,
     pub path_prefix: String,
+    pub data_mode: String,
     pub token_configured: bool,
     pub token_redacted: Option<String>,
     pub sync_password_configured: bool,
@@ -306,6 +351,7 @@ pub struct GitHubSyncRemoteDevice {
     pub last_import_at: Option<String>,
     pub calls: i64,
     pub total_tokens: i64,
+    pub sync_data_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,6 +361,8 @@ pub struct GitHubSyncSettingsInput {
     pub repo: String,
     pub branch: String,
     pub path_prefix: String,
+    #[serde(default)]
+    pub data_mode: Option<String>,
     pub token: Option<String>,
     pub sync_password: Option<String>,
 }

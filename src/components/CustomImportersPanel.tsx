@@ -201,7 +201,7 @@ export function CustomImportersPanel({ onNotice }: CustomImportersPanelProps) {
         setPreview(null);
       }
       await loadProfiles();
-      onNotice({ kind: "success", message: t("自定义数据源配置已删除。") });
+      onNotice({ kind: "success", message: t("自定义数据源配置和已导入数据已删除。") });
     } catch (err) {
       onNotice({
         kind: "error",

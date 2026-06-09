@@ -48,9 +48,26 @@ pub fn validate_source_key(source_key: &str) -> Result<(), String> {
             "source key only supports letters, numbers, colon, dash, and underscore".into(),
         );
     }
+    if source_key.starts_with("external:") || RESERVED_SOURCE_KEYS.contains(&source_key) {
+        return Err("source key is reserved by TokenScope internals".to_string());
+    }
 
     Ok(())
 }
+
+const RESERVED_SOURCE_KEYS: &[&str] = &[
+    "codex",
+    "codex_rollout_token_counts",
+    "codex_state_threads",
+    "hermes",
+    "hermes_state_sessions",
+    "opencode",
+    "opencode_messages",
+    "opencode_parts",
+    "claude-code",
+    "claude_code_transcripts",
+    "tokenscope_local",
+];
 
 pub fn validate_import_sql(sql: &str) -> Result<String, String> {
     let trimmed = sql.trim();
@@ -650,6 +667,7 @@ mod tests {
 
     use super::{
         import_custom_sqlite_profile, preview_custom_sqlite_importer, validate_import_sql,
+        validate_source_key,
     };
 
     #[test]
@@ -661,6 +679,13 @@ mod tests {
         assert!(validate_import_sql("DELETE FROM calls").is_err());
         assert!(validate_import_sql("SELECT id FROM calls; DROP TABLE calls").is_err());
         assert!(validate_import_sql("PRAGMA table_info(calls)").is_err());
+    }
+
+    #[test]
+    fn validate_source_key_rejects_reserved_sync_namespaces() {
+        assert!(validate_source_key("custom:test-agent").is_ok());
+        assert!(validate_source_key("codex_state_threads").is_err());
+        assert!(validate_source_key("external:device-a:custom").is_err());
     }
 
     #[tokio::test]
