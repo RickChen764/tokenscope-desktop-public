@@ -1,6 +1,13 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{header, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::time::Duration;
+
+const GITHUB_READ_REQUEST_RETRIES: usize = 2;
+const GITHUB_READ_RETRY_BASE_DELAY_MS: u64 = 250;
+const GITHUB_HTTP_TIMEOUT_SECS: u64 = 60;
+const GITHUB_HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Debug, Clone)]
 pub struct GitHubSyncLayout {
@@ -95,30 +102,60 @@ pub struct GitHubContentsClient {
     repo: String,
     branch: String,
     token: String,
+    base_url: String,
     http: reqwest::Client,
 }
 
 #[allow(dead_code)]
 impl GitHubContentsClient {
     pub fn new(owner: String, repo: String, branch: String, token: String) -> Self {
+        Self::with_base_url(
+            owner,
+            repo,
+            branch,
+            token,
+            "https://api.github.com".to_string(),
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_base_url(
+        owner: String,
+        repo: String,
+        branch: String,
+        token: String,
+        base_url: String,
+    ) -> Self {
+        Self::with_base_url(owner, repo, branch, token, base_url)
+    }
+
+    fn with_base_url(
+        owner: String,
+        repo: String,
+        branch: String,
+        token: String,
+        base_url: String,
+    ) -> Self {
         Self {
             owner,
             repo,
             branch,
             token,
-            http: reqwest::Client::new(),
+            base_url,
+            http: github_http_client(),
         }
     }
 
     pub async fn get_file(&self, path: &str) -> Result<Option<GitHubContentFile>, String> {
-        let response = self
-            .http
-            .get(self.contents_url(path))
-            .query(&[("ref", self.branch.as_str())])
-            .headers(self.json_headers())
-            .send()
-            .await
-            .map_err(|err| format!("GitHub 文件读取失败：{err}"))?;
+        let response = send_github_request(
+            self.http
+                .get(self.contents_url(path))
+                .query(&[("ref", self.branch.as_str())])
+                .headers(self.json_headers()),
+            "GitHub 文件读取失败",
+            GITHUB_READ_REQUEST_RETRIES,
+        )
+        .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -146,14 +183,15 @@ impl GitHubContentsClient {
     ) -> Result<GitHubContentFile, String> {
         let request =
             GitHubPutFileRequest::new(message.to_string(), content, sha).with_branch(&self.branch);
-        let response = self
-            .http
-            .put(self.contents_url(path))
-            .headers(self.json_headers())
-            .json(&request)
-            .send()
-            .await
-            .map_err(|err| format!("GitHub 文件上传失败：{err}"))?;
+        let response = send_github_request(
+            self.http
+                .put(self.contents_url(path))
+                .headers(self.json_headers())
+                .json(&request),
+            "GitHub 文件上传失败",
+            0,
+        )
+        .await?;
         if !response.status().is_success() {
             return Err(api_error(response).await);
         }
@@ -171,14 +209,15 @@ impl GitHubContentsClient {
     }
 
     pub async fn list_device_dirs(&self, layout: &GitHubSyncLayout) -> Result<Vec<String>, String> {
-        let response = self
-            .http
-            .get(self.contents_url(&layout.devices_path()))
-            .query(&[("ref", self.branch.as_str())])
-            .headers(self.json_headers())
-            .send()
-            .await
-            .map_err(|err| format!("GitHub 设备目录读取失败：{err}"))?;
+        let response = send_github_request(
+            self.http
+                .get(self.contents_url(&layout.devices_path()))
+                .query(&[("ref", self.branch.as_str())])
+                .headers(self.json_headers()),
+            "GitHub 设备目录读取失败",
+            GITHUB_READ_REQUEST_RETRIES,
+        )
+        .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(Vec::new());
         }
@@ -202,14 +241,15 @@ impl GitHubContentsClient {
         layout: &GitHubSyncLayout,
         device_id: &str,
     ) -> Result<Vec<GitHubContentFile>, String> {
-        let response = self
-            .http
-            .get(self.contents_url(&layout.days_path(device_id)))
-            .query(&[("ref", self.branch.as_str())])
-            .headers(self.json_headers())
-            .send()
-            .await
-            .map_err(|err| format!("GitHub 日期分片目录读取失败：{err}"))?;
+        let response = send_github_request(
+            self.http
+                .get(self.contents_url(&layout.days_path(device_id)))
+                .query(&[("ref", self.branch.as_str())])
+                .headers(self.json_headers()),
+            "GitHub 日期分片目录读取失败",
+            GITHUB_READ_REQUEST_RETRIES,
+        )
+        .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(Vec::new());
         }
@@ -237,7 +277,8 @@ impl GitHubContentsClient {
 
     fn contents_url(&self, path: &str) -> String {
         format!(
-            "https://api.github.com/repos/{}/{}/contents/{}",
+            "{}/repos/{}/{}/contents/{}",
+            self.base_url.trim_end_matches('/'),
             self.owner.trim_matches('/'),
             self.repo.trim_matches('/'),
             path.trim_matches('/')
@@ -245,14 +286,15 @@ impl GitHubContentsClient {
     }
 
     async fn get_raw_file(&self, path: &str) -> Result<Vec<u8>, String> {
-        let response = self
-            .http
-            .get(self.contents_url(path))
-            .query(&[("ref", self.branch.as_str())])
-            .headers(self.raw_headers())
-            .send()
-            .await
-            .map_err(|err| format!("GitHub raw 文件读取失败：{err}"))?;
+        let response = send_github_request(
+            self.http
+                .get(self.contents_url(path))
+                .query(&[("ref", self.branch.as_str())])
+                .headers(self.raw_headers()),
+            "GitHub raw 文件读取失败",
+            GITHUB_READ_REQUEST_RETRIES,
+        )
+        .await?;
         if !response.status().is_success() {
             return Err(api_error(response).await);
         }
@@ -324,6 +366,83 @@ impl GitHubGetFileResponse {
     }
 }
 
+fn github_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(GITHUB_HTTP_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(GITHUB_HTTP_CONNECT_TIMEOUT_SECS))
+        .build()
+        .expect("GitHub HTTP client builds")
+}
+
+async fn send_github_request(
+    request: reqwest::RequestBuilder,
+    context: &str,
+    retry_count: usize,
+) -> Result<reqwest::Response, String> {
+    let mut request = request;
+    let mut retries_used = 0;
+    loop {
+        let retry_request = if retries_used < retry_count {
+            request.try_clone()
+        } else {
+            None
+        };
+        match request.send().await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                if retries_used < retry_count {
+                    if let Some(next_request) = retry_request {
+                        retries_used += 1;
+                        tokio::time::sleep(Duration::from_millis(
+                            GITHUB_READ_RETRY_BASE_DELAY_MS * retries_used as u64,
+                        ))
+                        .await;
+                        request = next_request;
+                        continue;
+                    }
+                }
+                return Err(format_github_request_error(context, &err, retries_used));
+            }
+        }
+    }
+}
+
+fn format_github_request_error(context: &str, err: &reqwest::Error, retries_used: usize) -> String {
+    let mut qualifiers = Vec::new();
+    if retries_used > 0 {
+        qualifiers.push(format!("已重试 {retries_used} 次"));
+    }
+    if err.is_timeout() {
+        qualifiers.push("请求超时".to_string());
+    }
+    if err.is_connect() {
+        qualifiers.push("连接失败".to_string());
+    }
+    if err.is_request() {
+        qualifiers.push("请求发送失败".to_string());
+    }
+    if let Some(status) = err.status() {
+        qualifiers.push(format!("HTTP {status}"));
+    }
+
+    let mut message = format!("{context}：{err}");
+    if !qualifiers.is_empty() {
+        message.push_str(&format!("（{}）", qualifiers.join("，")));
+    }
+
+    let mut sources = Vec::new();
+    let mut source = err.source();
+    while let Some(current) = source {
+        sources.push(current.to_string());
+        source = current.source();
+    }
+    if !sources.is_empty() {
+        message.push_str(&format!("；底层原因：{}", sources.join(" <- ")));
+    }
+
+    message
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct GitHubPutFileResponse {
@@ -381,6 +500,12 @@ fn safe_path_segment(segment: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+
     use super::*;
 
     #[test]
@@ -450,5 +575,92 @@ mod tests {
             response.content_bytes().expect("content parses"),
             Some(b"hello".to_vec())
         );
+    }
+
+    #[tokio::test]
+    async fn github_get_file_retries_transient_send_failures() {
+        let (base_url, attempts) = spawn_github_contents_server(vec![
+            TestResponse::DropConnection,
+            TestResponse::Json(
+                r#"{"name":"2026-06-09.tokenscope.zst.enc","path":"tokenscope-sync/v1/devices/device-a/days/2026-06-09.tokenscope.zst.enc","sha":"file-sha","content":"aGVsbG8=","encoding":"base64"}"#,
+            ),
+        ]);
+        let client = GitHubContentsClient::new_with_base_url(
+            "rick".to_string(),
+            "tokenscope-sync".to_string(),
+            "main".to_string(),
+            "token".to_string(),
+            base_url,
+        );
+
+        let file = client
+            .get_file("tokenscope-sync/v1/devices/device-a/days/2026-06-09.tokenscope.zst.enc")
+            .await
+            .expect("request retries")
+            .expect("file exists");
+
+        assert_eq!(file.content, b"hello");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn github_get_file_reports_retry_count_after_repeated_send_failures() {
+        let (base_url, attempts) = spawn_github_contents_server(vec![
+            TestResponse::DropConnection,
+            TestResponse::DropConnection,
+            TestResponse::DropConnection,
+        ]);
+        let client = GitHubContentsClient::new_with_base_url(
+            "rick".to_string(),
+            "tokenscope-sync".to_string(),
+            "main".to_string(),
+            "token".to_string(),
+            base_url,
+        );
+
+        let err = client
+            .get_file("tokenscope-sync/v1/devices/device-a/days/2026-06-09.tokenscope.zst.enc")
+            .await
+            .expect_err("repeated send failures are reported");
+
+        assert!(err.contains("GitHub 文件读取失败"));
+        assert!(err.contains("已重试 2 次"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    enum TestResponse {
+        DropConnection,
+        Json(&'static str),
+    }
+
+    fn spawn_github_contents_server(responses: Vec<TestResponse>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test server binds");
+        let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_thread = Arc::clone(&attempts);
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("test request accepted");
+                attempts_for_thread.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0_u8; 2048];
+                let _ = stream.read(&mut buffer);
+                match response {
+                    TestResponse::DropConnection => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    TestResponse::Json(body) => {
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .expect("test response writes");
+                    }
+                }
+            }
+        });
+        (base_url, attempts)
     }
 }

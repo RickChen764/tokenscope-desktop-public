@@ -896,9 +896,15 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
     let Some(file) = transport.get_file(path).await? else {
         return Ok(());
     };
-    let plaintext = decrypt_sync_payload_bytes(&file.content, sync_password)?;
+    let plaintext = decrypt_remote_file_bytes(
+        path,
+        &file.content,
+        sync_password,
+        "GitHub 同步远端分片读取失败",
+    )?;
     let content_hash = content_hash_hex(&plaintext);
-    let package = decode_github_sync_package(&plaintext)?;
+    let package = decode_github_sync_package(&plaintext)
+        .map_err(|err| format!("GitHub 同步远端分片解析失败：{path}：{err}"))?;
     if expected_data_mode
         .map(|mode| package.data_mode() != mode)
         .unwrap_or(false)
@@ -1006,18 +1012,34 @@ async fn upload_plaintext<T: GitHubSyncTransport>(
     transport.put_file(path, encrypted, sha, message).await
 }
 
+fn decrypt_remote_file_bytes(
+    path: &str,
+    content: &[u8],
+    sync_password: &str,
+    context: &str,
+) -> Result<Vec<u8>, String> {
+    decrypt_sync_payload_bytes(content, sync_password)
+        .map_err(|err| format!("{context}：{path}：{err}"))
+}
+
 async fn remote_manifest_data_mode<T: GitHubSyncTransport>(
     transport: &T,
     layout: &GitHubSyncLayout,
     device_id: &str,
     sync_password: &str,
 ) -> Result<String, String> {
-    let Some(file) = transport.get_file(&layout.manifest_path(device_id)).await? else {
+    let manifest_path = layout.manifest_path(device_id);
+    let Some(file) = transport.get_file(&manifest_path).await? else {
         return Ok(GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string());
     };
-    let plaintext = decrypt_sync_payload_bytes(&file.content, sync_password)?;
+    let plaintext = decrypt_remote_file_bytes(
+        &manifest_path,
+        &file.content,
+        sync_password,
+        "GitHub 同步远端 manifest 读取失败",
+    )?;
     let manifest = serde_json::from_slice::<GitHubSyncManifest>(&plaintext)
-        .map_err(|err| format!("GitHub manifest 解析失败：{err}"))?;
+        .map_err(|err| format!("GitHub 同步远端 manifest 解析失败：{manifest_path}：{err}"))?;
     Ok(normalize_github_sync_data_mode(&manifest.active_data_mode).to_string())
 }
 
@@ -1626,6 +1648,7 @@ mod tests {
             .expect_err("corrupt remote shard fails");
 
         assert!(err.contains("GitHub 同步分片加密信封解析失败"));
+        assert!(err.contains("tokenscope-sync/v1/devices/remote-a/bootstrap.tokenscope.zst.enc"));
         assert_eq!(
             app_setting_value(&repository, "github_sync_last_status").await,
             Some("error".to_string())
@@ -1634,6 +1657,31 @@ mod tests {
             app_setting_value(&repository, "github_sync_last_message").await,
             Some(err)
         );
+    }
+
+    #[tokio::test]
+    async fn sync_reports_remote_manifest_path_when_manifest_is_not_an_encrypted_envelope() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
+        let transport = FakeGitHubTransport::default();
+        transport.seed_file(&layout.manifest_path("remote-a"), Vec::new());
+
+        let err = run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+            .await
+            .expect_err("corrupt remote manifest fails");
+
+        assert!(err.contains("GitHub 同步远端 manifest 读取失败"));
+        assert!(err.contains("GitHub 同步分片加密信封解析失败"));
+        assert!(err.contains("tokenscope-sync/v1/devices/remote-a/manifest.enc"));
     }
 
     #[test]
