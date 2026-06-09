@@ -55,6 +55,10 @@ const MIGRATION_BYTES: &[(i64, &[u8])] = &[
     ),
     (6, include_bytes!("../../migrations/0006_cost_currency.sql")),
     (7, include_bytes!("../../migrations/0007_github_sync.sql")),
+    (
+        8,
+        include_bytes!("../../migrations/0008_github_sync_blob_sha.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -1683,15 +1687,17 @@ impl TokenScopeRepository {
         shard_kind,
         shard_date,
         content_hash,
+        github_blob_sha,
         github_path,
         imported_at,
         updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
       ON CONFLICT(id) DO UPDATE SET
         device_id = excluded.device_id,
         shard_kind = excluded.shard_kind,
         shard_date = excluded.shard_date,
         content_hash = excluded.content_hash,
+        github_blob_sha = excluded.github_blob_sha,
         github_path = excluded.github_path,
         imported_at = excluded.imported_at,
         updated_at = excluded.updated_at
@@ -1702,6 +1708,7 @@ impl TokenScopeRepository {
         .bind(&input.shard_kind)
         .bind(&input.shard_date)
         .bind(&input.content_hash)
+        .bind(&input.github_blob_sha)
         .bind(&input.github_path)
         .bind(&input.imported_at)
         .bind(&now)
@@ -1731,6 +1738,7 @@ impl TokenScopeRepository {
         shard_kind,
         shard_date,
         content_hash,
+        github_blob_sha,
         github_path,
         imported_at,
         updated_at
@@ -4343,6 +4351,7 @@ mod tests {
                 shard_kind: "day".to_string(),
                 shard_date: Some("2026-06-05".to_string()),
                 content_hash: "abc123".to_string(),
+                github_blob_sha: Some("blob-abc123".to_string()),
                 github_path:
                     "tokenscope-sync/v1/devices/device-a/days/2026-06-05.tokenscope.zst.enc"
                         .to_string(),
@@ -4358,6 +4367,7 @@ mod tests {
             .expect("shard exists");
 
         assert_eq!(state.content_hash, "abc123");
+        assert_eq!(state.github_blob_sha.as_deref(), Some("blob-abc123"));
     }
 
     #[tokio::test]
@@ -4372,6 +4382,7 @@ mod tests {
                 shard_kind: "day".to_string(),
                 shard_date: Some("2026-06-05".to_string()),
                 content_hash: "local-hash".to_string(),
+                github_blob_sha: None,
                 github_path:
                     "tokenscope-sync/v1/devices/local-device/days/2026-06-05.tokenscope.zst.enc"
                         .to_string(),
@@ -4385,6 +4396,7 @@ mod tests {
                 shard_kind: "bootstrap".to_string(),
                 shard_date: None,
                 content_hash: "remote-bootstrap".to_string(),
+                github_blob_sha: None,
                 github_path: "tokenscope-sync/v1/devices/remote-a/bootstrap.tokenscope.zst.enc"
                     .to_string(),
                 imported_at: Some("2026-06-05T09:00:00+08:00".to_string()),
@@ -4398,6 +4410,7 @@ mod tests {
                     shard_kind: "day".to_string(),
                     shard_date: Some(date.to_string()),
                     content_hash: format!("remote-day-{date}"),
+                    github_blob_sha: None,
                     github_path: format!(
                         "tokenscope-sync/v1/devices/remote-a/days/{date}.tokenscope.zst.enc"
                     ),

@@ -17,6 +17,7 @@ import {
   getTokenPulsePositionLocked,
   hideTokenPulseWindow,
   openTokenPulseHome,
+  runBackgroundSyncOnce,
   setTokenPulseDetailHovered,
   setTokenPulseDragging,
   setTokenPulsePositionLocked,
@@ -27,9 +28,10 @@ import type {
   CodexUsageLimitWindow,
   TokenPulseSnapshot,
 } from "../types/dashboard";
-import { formatCompactToken, formatInteger } from "../utils/format";
+import { formatCompactToken, formatInteger, formatTokenByDisplayMode } from "../utils/format";
 
 const TOKEN_PULSE_REFRESH_MS = 60000;
+const TOKEN_PULSE_DELTA_VISIBLE_MS = 10000;
 const TOKEN_PULSE_HISTORY_DAYS = 30;
 const TOKEN_PULSE_MINI_WIDTH = 284;
 const TOKEN_PULSE_MINI_CODEX_WIDTH = 444;
@@ -95,8 +97,18 @@ type CodexUsageLimitsViewModel = {
   windows: CodexUsageLimitWindowViewModel[];
 };
 
+type PulseSnapshotCursor = {
+  todayLocal: string;
+  todayTokens: number;
+};
+
+type PulseRefreshOptions = {
+  showDelta?: boolean;
+};
+
 type TokenPulseViewModel = {
   averageLabel: string;
+  beginPulseDeltaAggregation: () => () => void;
   codexUsageLimits: CodexUsageLimitsViewModel | null;
   hourlyBars: HourlyTokenBar[];
   isLoading: boolean;
@@ -104,10 +116,14 @@ type TokenPulseViewModel = {
   comparisonLabel: string;
   ratioLabel: string;
   remainingLabel: string;
+  refreshCodexUsageLimits: () => Promise<void>;
+  refreshPulseSnapshot: (options?: PulseRefreshOptions) => Promise<void>;
   refreshSnapshot: () => Promise<void>;
   snapshot: TokenPulseSnapshot;
   showCodexUsageLimits: boolean;
   todayDateLabel: string;
+  todayDeltaLabel: string | null;
+  todayDeltaTitle: string | null;
   todayLabel: string;
   todayTitle: string;
   trendDirection: "up" | "down";
@@ -148,6 +164,11 @@ function getProgressPercent(snapshot: TokenPulseSnapshot) {
   }
 
   return Math.max(0, snapshot.ratio_to_average * 100);
+}
+
+function logTokenPulsePerf(stage: string, startedAt: number) {
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  console.info(`[tokenscope][perf] token_pulse.${stage} elapsed_ms=${elapsedMs}`);
 }
 
 function getRingProgressPercent(percent: number, allowOverflow: boolean) {
@@ -363,22 +384,117 @@ function buildHourlyBars(snapshot: TokenPulseSnapshot): HourlyTokenBar[] {
 
 function usePulseSnapshot() {
   const [snapshot, setSnapshot] = useState<TokenPulseSnapshot>(() => emptyPulseSnapshot());
+  const [todayDeltaTokens, setTodayDeltaTokens] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const isMountedRef = useRef(true);
+  const previousPulseSnapshotRef = useRef<PulseSnapshotCursor | null>(null);
+  const manualDeltaAggregationRef = useRef<{
+    base: PulseSnapshotCursor | null;
+    latest: PulseSnapshotCursor | null;
+  } | null>(null);
+  const deltaTimerRef = useRef<number | null>(null);
 
-  const refreshSnapshot = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const nextSnapshot = await getTokenPulse(TOKEN_PULSE_HISTORY_DAYS);
-      if (isMountedRef.current) {
-        setSnapshot(nextSnapshot);
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setIsLoading(false);
-      }
+  const clearDeltaTimer = useCallback(() => {
+    if (deltaTimerRef.current !== null) {
+      window.clearTimeout(deltaTimerRef.current);
+      deltaTimerRef.current = null;
     }
   }, []);
+
+  const showTodayDelta = useCallback(
+    (deltaTokens: number) => {
+      if (deltaTokens <= 0) {
+        clearDeltaTimer();
+        setTodayDeltaTokens(null);
+        return;
+      }
+
+      clearDeltaTimer();
+      setTodayDeltaTokens(deltaTokens);
+      deltaTimerRef.current = window.setTimeout(() => {
+        deltaTimerRef.current = null;
+        if (isMountedRef.current) {
+          setTodayDeltaTokens(null);
+        }
+      }, TOKEN_PULSE_DELTA_VISIBLE_MS);
+    },
+    [clearDeltaTimer],
+  );
+
+  const updateTodayDelta = useCallback(
+    (nextSnapshot: TokenPulseSnapshot, options: PulseRefreshOptions = {}) => {
+      const previous = previousPulseSnapshotRef.current;
+      const next = {
+        todayLocal: nextSnapshot.today_local,
+        todayTokens: nextSnapshot.today_tokens,
+      };
+      previousPulseSnapshotRef.current = next;
+
+      const deltaTokens =
+        previous && previous.todayLocal === nextSnapshot.today_local
+          ? nextSnapshot.today_tokens - previous.todayTokens
+          : 0;
+
+      if (manualDeltaAggregationRef.current) {
+        manualDeltaAggregationRef.current.latest = next;
+        return;
+      }
+
+      if (options.showDelta === false) {
+        return;
+      }
+
+      showTodayDelta(deltaTokens);
+    },
+    [showTodayDelta],
+  );
+
+  const beginPulseDeltaAggregation = useCallback(() => {
+    clearDeltaTimer();
+    setTodayDeltaTokens(null);
+    const base = previousPulseSnapshotRef.current;
+    manualDeltaAggregationRef.current = {
+      base,
+      latest: base,
+    };
+
+    let finished = false;
+    return function finishPulseDeltaAggregation() {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      const aggregation = manualDeltaAggregationRef.current;
+      manualDeltaAggregationRef.current = null;
+      const baseSnapshot = aggregation?.base;
+      const latestSnapshot = aggregation?.latest;
+      const deltaTokens =
+        baseSnapshot &&
+        latestSnapshot &&
+        baseSnapshot.todayLocal === latestSnapshot.todayLocal
+          ? latestSnapshot.todayTokens - baseSnapshot.todayTokens
+          : 0;
+      showTodayDelta(deltaTokens);
+    };
+  }, [clearDeltaTimer, showTodayDelta]);
+
+  const refreshSnapshot = useCallback(
+    async (options: PulseRefreshOptions = {}) => {
+      setIsLoading(true);
+      try {
+        const nextSnapshot = await getTokenPulse(TOKEN_PULSE_HISTORY_DAYS);
+        if (isMountedRef.current) {
+          updateTodayDelta(nextSnapshot, options);
+          setSnapshot(nextSnapshot);
+        }
+      } finally {
+        if (isMountedRef.current) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [updateTodayDelta],
+  );
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -389,11 +505,12 @@ function usePulseSnapshot() {
 
     return () => {
       isMountedRef.current = false;
+      clearDeltaTimer();
       window.clearInterval(refreshTimer);
     };
-  }, [refreshSnapshot]);
+  }, [clearDeltaTimer, refreshSnapshot]);
 
-  return { snapshot, isLoading, refreshSnapshot };
+  return { snapshot, todayDeltaTokens, isLoading, beginPulseDeltaAggregation, refreshSnapshot };
 }
 
 function useCodexUsageLimitSnapshot(enabled: boolean) {
@@ -462,11 +579,13 @@ function useNowMs(enabled: boolean) {
 
 function useTokenPulseViewModel(): TokenPulseViewModel {
   const { numberLocale } = useI18n();
-  const { showCodexUsageLimits } = useDisplayPreference();
+  const { numberDisplayMode, showCodexUsageLimits } = useDisplayPreference();
   const nowMs = useNowMs(showCodexUsageLimits);
   const {
     snapshot,
+    todayDeltaTokens,
     isLoading,
+    beginPulseDeltaAggregation,
     refreshSnapshot: refreshPulseSnapshot,
   } = usePulseSnapshot();
   const {
@@ -477,8 +596,16 @@ function useTokenPulseViewModel(): TokenPulseViewModel {
   const progressPercent = getProgressPercent(snapshot);
   const ratioLabel = formatRatio(snapshot, numberLocale);
   const comparisonLabel = buildComparisonLabel(snapshot, ratioLabel, numberLocale);
-  const todayLabel = formatCompactToken(snapshot.today_tokens, numberLocale);
+  const todayLabel = formatTokenByDisplayMode(snapshot.today_tokens, numberLocale, numberDisplayMode);
   const todayTitle = `${formatInteger(snapshot.today_tokens, numberLocale)} Token`;
+  const todayDeltaLabel =
+    todayDeltaTokens !== null
+      ? `+${formatTokenByDisplayMode(todayDeltaTokens, numberLocale, numberDisplayMode)}`
+      : null;
+  const todayDeltaTitle =
+    todayDeltaTokens !== null
+      ? `本次刷新 +${formatInteger(todayDeltaTokens, numberLocale)} Token`
+      : null;
   const averageLabel = formatCompactToken(snapshot.average_daily_tokens, numberLocale);
   const yesterdayLabel = formatCompactToken(snapshot.yesterday_tokens, numberLocale);
   const remainingLabel = formatCompactToken(snapshot.remaining_to_average, numberLocale);
@@ -506,6 +633,7 @@ function useTokenPulseViewModel(): TokenPulseViewModel {
 
   return {
     averageLabel,
+    beginPulseDeltaAggregation,
     codexUsageLimits,
     comparisonLabel,
     hourlyBars,
@@ -513,10 +641,14 @@ function useTokenPulseViewModel(): TokenPulseViewModel {
     progressPercent,
     ratioLabel,
     remainingLabel,
+    refreshCodexUsageLimits,
+    refreshPulseSnapshot,
     refreshSnapshot,
     snapshot,
     showCodexUsageLimits,
     todayDateLabel,
+    todayDeltaLabel,
+    todayDeltaTitle,
     todayLabel,
     todayTitle,
     trendDirection,
@@ -908,6 +1040,7 @@ function TokenPulseMini({
   dragHandlers,
   isDragging,
   isPositionLocked,
+  isRefreshing,
   onContextMenu,
   onHide,
   onOpenHome,
@@ -918,6 +1051,7 @@ function TokenPulseMini({
   dragHandlers: ReturnType<typeof useTokenPulseDrag>["dragHandlers"];
   isDragging: boolean;
   isPositionLocked: boolean;
+  isRefreshing: boolean;
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
   onHide: () => void;
   onOpenHome: () => void;
@@ -948,6 +1082,16 @@ function TokenPulseMini({
             <strong aria-label={viewModel.todayTitle}>{viewModel.todayLabel}</strong>
           </div>
         </div>
+        {viewModel.todayDeltaLabel ? (
+          <span
+            aria-label={viewModel.todayDeltaTitle ?? viewModel.todayDeltaLabel}
+            className="token-pulse-delta-chip"
+            title={viewModel.todayDeltaTitle ?? viewModel.todayDeltaLabel}
+          >
+            <TokenPulseTrendIcon direction="up" />
+            {viewModel.todayDeltaLabel}
+          </span>
+        ) : null}
       </div>
       {viewModel.showCodexUsageLimits ? (
         <div className="token-pulse-codex" aria-label="Codex 剩余用量">
@@ -985,7 +1129,8 @@ function TokenPulseMini({
         </button>
         <button
           aria-label="刷新数据"
-          className={`token-pulse-action-button refresh${viewModel.isLoading ? " is-loading" : ""}`}
+          className={`token-pulse-action-button refresh${viewModel.isLoading || isRefreshing ? " is-loading" : ""}`}
+          disabled={isRefreshing}
           onClick={onRefresh}
           onPointerDown={stopActionPointer}
           title="刷新数据"
@@ -1072,6 +1217,8 @@ export function TokenPulseWindow() {
   const { isPositionLocked, refreshPositionLocked, updatePositionLocked } =
     useTokenPulsePositionLock();
   const { dragHandlers, isDragging } = useTokenPulseDrag(isPositionLocked, refreshPositionLocked);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const isManualRefreshingRef = useRef(false);
   const hoverHandlers = useTokenPulseHover("mini", isDragging, {
     detailWidth: viewModel.showCodexUsageLimits
       ? TOKEN_PULSE_DETAIL_CODEX_WIDTH
@@ -1101,9 +1248,51 @@ export function TokenPulseWindow() {
   }
 
   function handleRefresh() {
-    void viewModel.refreshSnapshot().catch(() => {
+    if (isManualRefreshingRef.current) {
+      return;
+    }
+
+    void refreshAfterManualSync().catch(() => {
       // Browser preview renders the window without desktop data commands.
     });
+  }
+
+  async function refreshAfterManualSync() {
+    isManualRefreshingRef.current = true;
+    setIsManualRefreshing(true);
+    const refreshStartedAt = performance.now();
+    const finishPulseDeltaAggregation = viewModel.beginPulseDeltaAggregation();
+    const codexUsageLimitsRefresh = viewModel.showCodexUsageLimits
+      ? viewModel.refreshCodexUsageLimits().finally(() => {
+          logTokenPulsePerf("manual_refresh.codex_usage", refreshStartedAt);
+        })
+      : Promise.resolve();
+    try {
+      try {
+        const syncStartedAt = performance.now();
+        try {
+          await runBackgroundSyncOnce();
+        } finally {
+          logTokenPulsePerf("manual_refresh.background_sync", syncStartedAt);
+        }
+      } finally {
+        const pulseStartedAt = performance.now();
+        try {
+          await Promise.all([
+            viewModel.refreshPulseSnapshot({ showDelta: false }).finally(() => {
+              logTokenPulsePerf("manual_refresh.pulse_snapshot", pulseStartedAt);
+            }),
+            codexUsageLimitsRefresh,
+          ]);
+        } finally {
+          finishPulseDeltaAggregation();
+        }
+      }
+    } finally {
+      logTokenPulsePerf("manual_refresh.total", refreshStartedAt);
+      isManualRefreshingRef.current = false;
+      setIsManualRefreshing(false);
+    }
   }
 
   function handleHide() {
@@ -1122,6 +1311,7 @@ export function TokenPulseWindow() {
         dragHandlers={dragHandlers}
         isDragging={isDragging}
         isPositionLocked={isPositionLocked}
+        isRefreshing={isManualRefreshing}
         onContextMenu={handleContextMenu}
         onHide={handleHide}
         onOpenHome={handleOpenHome}

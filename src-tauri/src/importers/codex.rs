@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use chrono::{DateTime, Duration, Local, Utc};
 use serde::{Deserialize, Serialize};
@@ -118,21 +119,36 @@ pub fn get_default_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot
 pub fn latest_codex_usage_limits_from_sessions_path(
     sessions_path: &Path,
 ) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    let started = Instant::now();
     if !sessions_path.exists() {
+        eprintln!(
+            "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files=0 bytes=0 lines=0 snapshots=0 found=false missing_path=true",
+            started.elapsed().as_millis()
+        );
         return Ok(None);
     }
 
     let mut rollout_files = Vec::new();
     collect_rollout_jsonl_files(sessions_path, &mut rollout_files)?;
+    let file_count = rollout_files.len();
+    let total_bytes: u64 = rollout_files
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok().map(|metadata| metadata.len()))
+        .sum();
 
     let mut latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
     let mut latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    let mut failed_files = 0;
+    let mut scanned_lines: u64 = 0;
+    let mut snapshots = 0;
     for rollout_path in rollout_files {
         let Ok(file) = File::open(&rollout_path) else {
+            failed_files += 1;
             continue;
         };
 
         for (index, line) in BufReader::new(file).lines().enumerate() {
+            scanned_lines += 1;
             let Ok(line) = line else {
                 continue;
             };
@@ -141,6 +157,7 @@ pub fn latest_codex_usage_limits_from_sessions_path(
             else {
                 continue;
             };
+            snapshots += 1;
             let Ok(captured_at) = DateTime::parse_from_rfc3339(&snapshot.captured_at) else {
                 continue;
             };
@@ -161,18 +178,32 @@ pub fn latest_codex_usage_limits_from_sessions_path(
         }
     }
 
-    let Some((latest_at, latest_snapshot)) = latest else {
-        return Ok(None);
-    };
-
-    if let Some((latest_general_at, latest_general_snapshot)) = latest_general {
-        let max_staleness = Duration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
-        if latest_at.signed_duration_since(latest_general_at) <= max_staleness {
-            return Ok(Some(latest_general_snapshot));
+    let result = if let Some((latest_at, _)) = latest {
+        if let Some((latest_general_at, latest_general_snapshot)) = latest_general {
+            let max_staleness = Duration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
+            if latest_at.signed_duration_since(latest_general_at) <= max_staleness {
+                Some(latest_general_snapshot)
+            } else {
+                None
+            }
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
+    eprintln!(
+        "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files={} failed_files={} bytes={} lines={} snapshots={} found={}",
+        started.elapsed().as_millis(),
+        file_count,
+        failed_files,
+        total_bytes,
+        scanned_lines,
+        snapshots,
+        result.is_some()
+    );
 
-    Ok(Some(latest_snapshot))
+    Ok(result)
 }
 
 pub async fn import_default_codex_threads(
@@ -557,18 +588,34 @@ fn resolve_rollout_path(source_path: &Path, rollout_path: &str) -> PathBuf {
 }
 
 fn read_rollout_token_counts(path: &Path) -> Vec<CodexRolloutTokenCount> {
+    let started = Instant::now();
     let Ok(file) = File::open(path) else {
         return Vec::new();
     };
 
-    BufReader::new(file)
+    let counts = BufReader::new(file)
         .lines()
         .enumerate()
         .filter_map(|(index, line)| {
             let line = line.ok()?;
             rollout_line_to_token_count(index + 1, &line)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let elapsed_ms = started.elapsed().as_millis();
+    if elapsed_ms >= 50 {
+        let bytes = fs::metadata(path)
+            .ok()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        eprintln!(
+            "[tokenscope][perf] codex_rollout_token_counts.read elapsed_ms={} bytes={} token_counts={} path={}",
+            elapsed_ms,
+            bytes,
+            counts.len(),
+            path.display()
+        );
+    }
+    counts
 }
 
 fn rollout_line_to_token_count(line_number: usize, line: &str) -> Option<CodexRolloutTokenCount> {
@@ -1007,6 +1054,25 @@ mod tests {
         assert_eq!(snapshot.primary.used_percent, 7.0);
         assert_eq!(snapshot.secondary.used_percent, 25.0);
         assert!(snapshot.source_path.ends_with("general.jsonl"));
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
+
+    #[test]
+    fn ignores_model_specific_codex_usage_limit_without_general_snapshot() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &nested_path.join("spark.jsonl"),
+            r#"{"timestamp":"2026-06-08T03:00:23.644Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","plan_type":"pro","primary":{"resets_at":1780905551,"used_percent":0.0,"window_minutes":300},"secondary":{"resets_at":1781492351,"used_percent":0.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+
+        let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
+            .expect("session rollouts are scanned");
+
+        assert!(snapshot.is_none());
 
         fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
     }

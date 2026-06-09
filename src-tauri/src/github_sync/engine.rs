@@ -524,7 +524,7 @@ async fn run_with_settings<T: GitHubSyncTransport>(
         if let Some(runtime) = runtime {
             runtime.update_progress("upload", "上传本机 bootstrap 分片", 1, 1);
         }
-        upload_package(
+        let uploaded_file = upload_package(
             transport,
             &path,
             &bootstrap_package,
@@ -538,6 +538,7 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                 shard_kind: "bootstrap".to_string(),
                 shard_date: None,
                 content_hash: hash,
+                github_blob_sha: Some(uploaded_file.sha),
                 github_path: path,
                 imported_at: None,
             })
@@ -584,7 +585,7 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                     total_dates,
                 );
             }
-            upload_plaintext(
+            let uploaded_file = upload_plaintext(
                 transport,
                 &path,
                 &plaintext,
@@ -598,6 +599,7 @@ async fn run_with_settings<T: GitHubSyncTransport>(
                     shard_kind: "day".to_string(),
                     shard_date: Some(date),
                     content_hash: hash,
+                    github_blob_sha: Some(uploaded_file.sha),
                     github_path: path,
                     imported_at: None,
                 })
@@ -705,6 +707,7 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
             repository,
             transport,
             &bootstrap_path,
+            None,
             sync_password,
             false,
             &mut summary,
@@ -718,10 +721,10 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
         day_files.sort_by(|left, right| left.path.cmp(&right.path));
         let total_day_files = day_files.len() as i64;
         for (file_index, day_file) in day_files.into_iter().enumerate() {
-            if parse_day_file_date(&day_file.name).is_none() {
+            let Some(day_file_date) = parse_day_file_date(&day_file.name) else {
                 summary.skipped += 1;
                 continue;
-            }
+            };
             if let Some(runtime) = runtime {
                 runtime.update_progress(
                     "download",
@@ -739,6 +742,12 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
                 repository,
                 transport,
                 &day_file.path,
+                Some(RemoteShardHint {
+                    device_id: &remote_device_id,
+                    shard_kind: "day",
+                    shard_date: Some(day_file_date.as_str()),
+                    github_blob_sha: day_file.sha.as_str(),
+                }),
                 sync_password,
                 false,
                 &mut summary,
@@ -769,6 +778,7 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
         repository,
         transport,
         &bootstrap_path,
+        None,
         sync_password,
         force_reimport,
         summary,
@@ -782,10 +792,10 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
     day_files.sort_by(|left, right| left.path.cmp(&right.path));
     let total_day_files = day_files.len() as i64;
     for (file_index, day_file) in day_files.into_iter().enumerate() {
-        if parse_day_file_date(&day_file.name).is_none() {
+        let Some(day_file_date) = parse_day_file_date(&day_file.name) else {
             summary.skipped += 1;
             continue;
-        }
+        };
         if let Some(runtime) = runtime {
             runtime.update_progress(
                 "download",
@@ -803,6 +813,12 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
             repository,
             transport,
             &day_file.path,
+            Some(RemoteShardHint {
+                device_id: remote_device_id,
+                shard_kind: "day",
+                shard_date: Some(day_file_date.as_str()),
+                github_blob_sha: day_file.sha.as_str(),
+            }),
             sync_password,
             force_reimport,
             summary,
@@ -820,10 +836,27 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
     repository: &TokenScopeRepository,
     transport: &T,
     path: &str,
+    shard_hint: Option<RemoteShardHint<'_>>,
     sync_password: &str,
     force_reimport: bool,
     summary: &mut GitHubSyncDownloadSummary,
 ) -> Result<(), String> {
+    if !force_reimport {
+        if let Some(hint) = shard_hint.as_ref() {
+            if repository
+                .github_sync_shard(hint.device_id, hint.shard_kind, hint.shard_date)
+                .await
+                .map_err(|err| err.to_string())?
+                .as_ref()
+                .and_then(|state| state.github_blob_sha.as_deref())
+                == Some(hint.github_blob_sha)
+            {
+                summary.skipped += 1;
+                return Ok(());
+            }
+        }
+    }
+
     let Some(file) = transport.get_file(path).await? else {
         return Ok(());
     };
@@ -858,6 +891,7 @@ async fn import_remote_shard<T: GitHubSyncTransport>(
             shard_kind,
             shard_date,
             content_hash,
+            github_blob_sha: Some(file.sha),
             github_path: path.to_string(),
             imported_at: Some(imported_at),
         })
@@ -889,11 +923,9 @@ async fn upload_package<T: GitHubSyncTransport>(
     package: &GitHubSyncPackage,
     sync_password: &str,
     message: &str,
-) -> Result<String, String> {
+) -> Result<GitHubContentFile, String> {
     let plaintext = package_bytes(package)?;
-    let hash = content_hash_hex(&plaintext);
-    upload_plaintext(transport, path, &plaintext, sync_password, message).await?;
-    Ok(hash)
+    upload_plaintext(transport, path, &plaintext, sync_password, message).await
 }
 
 async fn upload_manifest<T: GitHubSyncTransport>(
@@ -926,15 +958,12 @@ async fn upload_plaintext<T: GitHubSyncTransport>(
     plaintext: &[u8],
     sync_password: &str,
     message: &str,
-) -> Result<(), String> {
+) -> Result<GitHubContentFile, String> {
     let envelope = encrypt_sync_payload(plaintext, sync_password)?;
     let encrypted =
         serde_json::to_vec(&envelope).map_err(|err| format!("GitHub 加密信封序列化失败：{err}"))?;
     let sha = transport.get_file(path).await?.map(|file| file.sha);
-    transport
-        .put_file(path, encrypted, sha, message)
-        .await
-        .map(|_| ())
+    transport.put_file(path, encrypted, sha, message).await
 }
 
 fn package_bytes(package: &GitHubSyncPackage) -> Result<Vec<u8>, String> {
@@ -1004,10 +1033,18 @@ struct GitHubSyncManifest {
     updated_at: String,
 }
 
+struct RemoteShardHint<'a> {
+    device_id: &'a str,
+    shard_kind: &'static str,
+    shard_date: Option<&'a str>,
+    github_blob_sha: &'a str,
+}
+
 #[cfg(test)]
 #[derive(Default)]
 pub struct FakeGitHubTransport {
     uploaded: std::sync::Mutex<Vec<FakeUploadedFile>>,
+    get_file_paths: std::sync::Mutex<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -1039,6 +1076,15 @@ impl FakeGitHubTransport {
             sha,
             content,
         });
+    }
+
+    fn get_file_count_for(&self, path: &str) -> usize {
+        self.get_file_paths
+            .lock()
+            .expect("fake transport get file lock")
+            .iter()
+            .filter(|current| current.as_str() == path)
+            .count()
     }
 }
 
@@ -1089,6 +1135,10 @@ impl GitHubSyncTransport for FakeGitHubTransport {
     }
 
     async fn get_file(&self, path: &str) -> Result<Option<GitHubContentFile>, String> {
+        self.get_file_paths
+            .lock()
+            .expect("fake transport get file lock")
+            .push(path.to_string());
         Ok(self
             .uploaded
             .lock()
@@ -1293,6 +1343,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sync_skips_remote_day_download_when_github_sha_is_unchanged() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
+        let day_path = layout.day_path("remote-a", "2026-06-05");
+        let transport = FakeGitHubTransport::default();
+        let remote_package = remote_day_package("remote-a", "2026-06-05", 300);
+        transport.seed_file(
+            &day_path,
+            encrypted_package_bytes(&remote_package, "sync-password"),
+        );
+
+        run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+            .await
+            .expect("first sync succeeds");
+        assert_eq!(transport.get_file_count_for(&day_path), 1);
+
+        let result =
+            run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+                .await
+                .expect("second sync succeeds");
+
+        assert_eq!(result.downloaded_shards, 0);
+        assert_eq!(transport.get_file_count_for(&day_path), 1);
+    }
+
+    #[tokio::test]
     async fn force_reimport_remote_device_ignores_recorded_hash_and_repairs_imported_rows() {
         let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
         repository.migrate().await.unwrap();
@@ -1320,6 +1405,7 @@ mod tests {
                 shard_kind: "day".to_string(),
                 shard_date: Some("2026-06-05".to_string()),
                 content_hash,
+                github_blob_sha: None,
                 github_path: layout.day_path("remote-a", "2026-06-05"),
                 imported_at: Some("2026-06-06T10:00:00+08:00".to_string()),
             })

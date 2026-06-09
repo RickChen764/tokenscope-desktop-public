@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 
@@ -30,8 +30,10 @@ pub async fn run_once(
     runtime: &BackgroundSyncRuntime,
     github_sync_runtime: &GitHubSyncRuntime,
 ) -> Result<SyncRunResult, String> {
+    let total_started = Instant::now();
     let now = Local::now().to_rfc3339();
     if !runtime.try_start() {
+        eprintln!("[tokenscope][perf] background_sync.total elapsed_ms=0 status=busy");
         return Ok(SyncRunResult {
             status: "busy".to_string(),
             message: "已有同步任务正在执行。".to_string(),
@@ -43,10 +45,18 @@ pub async fn run_once(
     }
 
     let started_at = Local::now().to_rfc3339();
+    let import_started = Instant::now();
     let results = import_detected_agents(repository).await;
     let imported = results.iter().map(|result| result.imported).sum();
     let skipped = results.iter().map(|result| result.skipped).sum();
     let failed = has_failed_import(&results);
+    eprintln!(
+        "[tokenscope][perf] background_sync.import_agents elapsed_ms={} imported={} skipped={} failed={}",
+        import_started.elapsed().as_millis(),
+        imported,
+        skipped,
+        failed
+    );
     let status = if failed { "error" } else { "success" };
     let message = if results.is_empty() {
         "未检测到可同步的本机 Agent 数据源。".to_string()
@@ -59,6 +69,7 @@ pub async fn run_once(
     };
     let finished_at = Local::now().to_rfc3339();
 
+    let record_started = Instant::now();
     let record_result = repository
         .record_sync_run(
             &started_at,
@@ -70,11 +81,40 @@ pub async fn run_once(
         )
         .await
         .map_err(|err| err.to_string());
+    eprintln!(
+        "[tokenscope][perf] background_sync.record_sync_run elapsed_ms={} status={}",
+        record_started.elapsed().as_millis(),
+        if record_result.is_ok() { "ok" } else { "error" }
+    );
     if record_result.is_ok() && !failed {
-        let _ = github_sync::engine::run_once_with_runtime(repository, github_sync_runtime, false)
-            .await;
+        let github_started = Instant::now();
+        let github_result =
+            github_sync::engine::run_once_with_runtime(repository, github_sync_runtime, false)
+                .await;
+        match &github_result {
+            Ok(result) => eprintln!(
+                "[tokenscope][perf] background_sync.github_sync elapsed_ms={} status={}",
+                github_started.elapsed().as_millis(),
+                result.status
+            ),
+            Err(_) => eprintln!(
+                "[tokenscope][perf] background_sync.github_sync elapsed_ms={} status=error",
+                github_started.elapsed().as_millis()
+            ),
+        }
     }
     runtime.finish();
+    eprintln!(
+        "[tokenscope][perf] background_sync.total elapsed_ms={} status={} imported={} skipped={}",
+        total_started.elapsed().as_millis(),
+        if record_result.is_ok() {
+            status
+        } else {
+            "error"
+        },
+        imported,
+        skipped
+    );
     record_result?;
 
     Ok(SyncRunResult {

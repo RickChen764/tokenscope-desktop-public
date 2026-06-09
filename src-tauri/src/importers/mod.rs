@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::time::Instant;
 
 use chrono::{DateTime, Duration, Local};
 use serde::{Deserialize, Serialize};
@@ -172,7 +173,17 @@ pub async fn import_detected_agents_with_mode(
             }
         };
 
+        let import_started = Instant::now();
         let mut result = importer.import(repository, &status, &scope).await;
+        eprintln!(
+            "[tokenscope][perf] importer.{} elapsed_ms={} status={} imported={} skipped={} mode={:?}",
+            importer.id(),
+            import_started.elapsed().as_millis(),
+            result.status,
+            result.imported,
+            result.skipped,
+            mode
+        );
         if result.status == "success" {
             if let Err(err) = repository
                 .save_import_cursor(importer.id(), &cursor_at)

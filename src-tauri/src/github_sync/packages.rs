@@ -125,8 +125,11 @@ pub async fn import_github_sync_package(
         .iter()
         .map(|call| call.call.estimated_cost_usd)
         .sum::<f64>();
-    let cost_currency =
-        summarize_cost_currency(import_calls.iter().map(|call| call.call.cost_currency.as_str()));
+    let cost_currency = summarize_cost_currency(
+        import_calls
+            .iter()
+            .map(|call| call.call.cost_currency.as_str()),
+    );
     let input = ExternalDatasetInput {
         id: dataset_id,
         device_id: package.device.id,
@@ -180,7 +183,15 @@ fn validate_package(package: &GitHubSyncPackage) -> Result<(), String> {
     }
     match package.shard.kind.as_str() {
         "bootstrap" => Ok(()),
-        "day" if package.shard.date.as_deref().unwrap_or("").trim().is_empty() => {
+        "day"
+            if package
+                .shard
+                .date
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty() =>
+        {
             Err("GitHub day 分片缺少日期。".to_string())
         }
         "day" => Ok(()),
@@ -249,8 +260,8 @@ mod tests {
             .await
             .unwrap();
 
-        let june4 = count_imported_rows_for_date(&repository, "device-remote-a", "2026-06-04")
-            .await;
+        let june4 =
+            count_imported_rows_for_date(&repository, "device-remote-a", "2026-06-04").await;
         let june5_total =
             sum_imported_tokens_for_date(&repository, "device-remote-a", "2026-06-05").await;
 

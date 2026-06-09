@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use chrono::{Duration, Local, NaiveDate};
 use serde::Serialize;
 use tauri::State;
@@ -101,10 +103,16 @@ pub async fn get_token_pulse(
     state: State<'_, AppState>,
     history_days: Option<i64>,
 ) -> Result<TokenPulseSnapshot, String> {
-    state
-        .repository
-        .token_pulse_snapshot(history_days.unwrap_or(30))
-        .await
+    let history_days = history_days.unwrap_or(30);
+    let started = Instant::now();
+    let result = state.repository.token_pulse_snapshot(history_days).await;
+    eprintln!(
+        "[tokenscope][perf] command.get_token_pulse elapsed_ms={} history_days={} status={}",
+        started.elapsed().as_millis(),
+        history_days,
+        if result.is_ok() { "ok" } else { "error" }
+    );
+    result
 }
 
 fn validate_date_range(from: &str, to: &str) -> Result<(), String> {
@@ -417,8 +425,19 @@ pub async fn import_codex_threads(state: State<'_, AppState>) -> Result<CodexImp
 }
 
 #[tauri::command]
-pub fn get_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
-    get_default_codex_usage_limits()
+pub async fn get_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    let started = Instant::now();
+    let result = tauri::async_runtime::spawn_blocking(get_default_codex_usage_limits)
+        .await
+        .map_err(|err| err.to_string())
+        .and_then(|inner| inner);
+    eprintln!(
+        "[tokenscope][perf] command.get_codex_usage_limits elapsed_ms={} status={} found={}",
+        started.elapsed().as_millis(),
+        if result.is_ok() { "ok" } else { "error" },
+        matches!(&result, Ok(Some(_)))
+    );
+    result
 }
 
 #[tauri::command]
@@ -461,21 +480,44 @@ pub async fn save_sync_settings(
 
 #[tauri::command]
 pub async fn run_background_sync_once(state: State<'_, AppState>) -> Result<SyncSettings, String> {
-    let result = background_sync::run_once(
+    let started = Instant::now();
+    let sync_started = Instant::now();
+    let result = match background_sync::run_once(
         &state.repository,
         &state.sync_runtime,
         &state.github_sync_runtime,
     )
-    .await?;
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!(
+                "[tokenscope][perf] command.run_background_sync_once elapsed_ms={} sync_ms={} status=error",
+                started.elapsed().as_millis(),
+                sync_started.elapsed().as_millis()
+            );
+            return Err(err);
+        }
+    };
+    let sync_ms = sync_started.elapsed().as_millis();
+    let settings_started = Instant::now();
     let mut settings = state
         .repository
         .get_sync_settings()
         .await
         .map_err(|err| err.to_string())?;
+    let settings_ms = settings_started.elapsed().as_millis();
     if result.status == "busy" {
         settings.last_result = Some(result.message);
         settings.last_error = None;
     }
+    eprintln!(
+        "[tokenscope][perf] command.run_background_sync_once elapsed_ms={} sync_ms={} settings_ms={} status={}",
+        started.elapsed().as_millis(),
+        sync_ms,
+        settings_ms,
+        result.status
+    );
 
     Ok(settings)
 }

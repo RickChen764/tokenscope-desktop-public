@@ -326,6 +326,7 @@ pub struct GitHubSyncShardState {
     pub shard_kind: String,
     pub shard_date: Option<String>,
     pub content_hash: String,
+    pub github_blob_sha: Option<String>,
     pub github_path: String,
     pub imported_at: Option<String>,
     pub updated_at: String,
@@ -337,6 +338,7 @@ pub struct GitHubSyncShardStateInput {
     pub shard_kind: String,
     pub shard_date: Option<String>,
     pub content_hash: String,
+    pub github_blob_sha: Option<String>,
     pub github_path: String,
     pub imported_at: Option<String>,
 }
