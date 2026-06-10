@@ -25,7 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .on_menu_event(|app, event| tray_status::handle_token_pulse_menu_event(app, event))
+        .on_menu_event(tray_status::handle_token_pulse_menu_event)
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
@@ -37,10 +37,7 @@ pub fn run() {
                 Ok::<TokenScopeRepository, Box<dyn std::error::Error + Send + Sync>>(repository)
             })
             .map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("failed to initialize database: {err}"),
-                )
+                std::io::Error::other(format!("failed to initialize database: {err}"))
             })?;
 
             let sync_runtime = background_sync::BackgroundSyncRuntime::default();

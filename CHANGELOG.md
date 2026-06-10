@@ -2,6 +2,13 @@
 
 ## 2026-06-10
 
+### 0.1.18 更新包
+
+- 优化 GitHub 今日同步远端分片读取，使用远端 blob SHA 跳过未变化的日分片下载。
+- 优化 Codex 用量快照扫描，合并 active 与 archived 会话目录，并保守合并近期通用额度快照。
+- 收紧桌面 WebView Content Security Policy，并为前端构建拆分 React 与 ECharts 依赖块。
+- 版本提升到 `0.1.18`，用于发布新的 Windows NSIS 安装包、Tauri updater 签名文件和 `latest.json`。
+
 ### 0.1.17 更新包
 
 - 调整今日 Token 小窗手动刷新为同步今日数据，刷新后直接更新今日统计。

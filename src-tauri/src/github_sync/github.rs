@@ -174,6 +174,30 @@ impl GitHubContentsClient {
         Ok(Some(body.into_content_file(content)))
     }
 
+    pub async fn get_file_metadata(&self, path: &str) -> Result<Option<GitHubContentFile>, String> {
+        let response = send_github_request(
+            self.http
+                .get(self.contents_url(path))
+                .query(&[("ref", self.branch.as_str())])
+                .headers(self.json_headers()),
+            "GitHub 文件元数据读取失败",
+            GITHUB_READ_REQUEST_RETRIES,
+        )
+        .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(api_error(response).await);
+        }
+
+        let body = response
+            .json::<GitHubGetFileResponse>()
+            .await
+            .map_err(|err| format!("GitHub 文件元数据响应解析失败：{err}"))?;
+        Ok(Some(body.into_content_file(Vec::new())))
+    }
+
     pub async fn put_file(
         &self,
         path: &str,
@@ -492,10 +516,7 @@ fn normalize_prefix(prefix: &str) -> String {
 }
 
 fn safe_path_segment(segment: &str) -> String {
-    segment
-        .trim_matches('/')
-        .replace('\\', "-")
-        .replace('/', "-")
+    segment.trim_matches('/').replace(['\\', '/'], "-")
 }
 
 #[cfg(test)]

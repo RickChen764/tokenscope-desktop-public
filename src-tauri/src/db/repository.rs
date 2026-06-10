@@ -4057,6 +4057,8 @@ fn normalize_lf_to_crlf(bytes: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::too_many_arguments)]
+
     use super::{
         AppSettingsInput, CustomImporterProfileInput, ExternalDatasetInput,
         GitHubSyncShardStateInput, LlmCallFilters, ProviderConfigInput, TokenPulseWindowPosition,

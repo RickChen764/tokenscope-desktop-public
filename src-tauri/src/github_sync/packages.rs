@@ -717,11 +717,11 @@ fn dimension_keys_for_call(call: &DevicePackageCall) -> Vec<DimensionKey> {
         call.model_response
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| call.model_requested.as_deref()),
+            .or(call.model_requested.as_deref()),
         call.model_response
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| call.model_requested.as_deref()),
+            .or(call.model_requested.as_deref()),
     );
     push_dimension_key(
         &mut keys,

@@ -484,6 +484,15 @@ test("daily chart uses an information-rich visual stage without losing scale con
   assert.ok(styles.includes(".usage-chart-stage"));
 });
 
+test("frontend build splits heavy chart and framework dependencies", () => {
+  const viteConfig = readProjectFile("vite.config.ts");
+
+  assert.ok(viteConfig.includes("manualChunks"));
+  assert.ok(viteConfig.includes("vendor-react"));
+  assert.ok(viteConfig.includes("vendor-echarts"));
+  assert.ok(viteConfig.includes("chunkSizeWarningLimit"));
+});
+
 test("line chart y-axis unit does not overlap the top scale label", () => {
   const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
 
@@ -853,7 +862,7 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   assert.ok(trayStatus.includes("show_menu_on_left_click(false)"));
   assert.ok(trayStatus.includes(".menu(&tray_menu)"));
   assert.ok(trayStatus.includes("pub fn handle_token_pulse_menu_event"));
-  assert.ok(tauriEntrypoint.includes(".on_menu_event(|app, event| tray_status::handle_token_pulse_menu_event(app, event))"));
+  assert.ok(tauriEntrypoint.includes(".on_menu_event(tray_status::handle_token_pulse_menu_event)"));
   assert.ok(trayStatus.includes("CheckMenuItemBuilder::with_id(TOKEN_PULSE_MENU_TOGGLE_VISIBLE"));
   assert.ok(trayStatus.includes("token_pulse_window_currently_visible(manager.app_handle())"));
   assert.ok(trayStatus.includes("set_token_pulse_tray_toggle_checked"));
@@ -1103,6 +1112,16 @@ test("release packaging uses a Windows installer instead of a bare executable on
   assert.deepEqual(tauriConfig.bundle.targets, ["nsis"]);
   assert.equal(tauriConfig.bundle.windows.nsis.installerIcon, "icons/icon.ico");
   assert.equal(tauriConfig.bundle.windows.nsis.uninstallerIcon, "icons/icon.ico");
+});
+
+test("desktop webview keeps a restrictive content security policy", () => {
+  const tauriConfig = JSON.parse(readProjectFile("src-tauri/tauri.conf.json"));
+
+  assert.equal(typeof tauriConfig.app.security.csp, "string");
+  assert.ok(tauriConfig.app.security.csp.includes("default-src 'self'"));
+  assert.ok(tauriConfig.app.security.csp.includes("script-src 'self'"));
+  assert.ok(tauriConfig.app.security.csp.includes("style-src 'self' 'unsafe-inline'"));
+  assert.equal(tauriConfig.app.security.csp.includes("script-src 'self' 'unsafe-inline'"), false);
 });
 
 test("application exposes a signed Tauri updater workflow", () => {

@@ -200,7 +200,7 @@ fn record_is_before_scope(record: &ClaudeCodeTranscriptRecord, scope: &ImportSco
         return false;
     };
 
-    started_at < since.clone()
+    started_at < *since
 }
 
 fn transcript_line_to_record(
