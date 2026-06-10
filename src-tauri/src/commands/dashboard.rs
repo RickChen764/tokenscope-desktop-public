@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone};
 use serde::Serialize;
 use tauri::State;
 
@@ -8,9 +8,10 @@ use crate::background_sync;
 use crate::db::{
     AgentSourceStats, CallFilterOptions, CustomImporterPreview, CustomImporterProfile,
     CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint, DashboardSummary,
-    DataHealthIssueRow, DataHealthSummary, LlmCallFilters, LlmCallPage, LlmCallRow, SyncSettings,
-    SyncSettingsInput, TokenPulseSnapshot, TopDimensionRow,
+    DataHealthIssueRow, DataHealthSummary, LlmCallFilters, LlmCallPage, LlmCallRow, SyncRunResult,
+    SyncSettings, SyncSettingsInput, TokenPulseSnapshot, TopDimensionRow,
 };
+use crate::github_sync;
 use crate::importers::codex::{
     get_default_codex_usage_limits, import_default_codex_threads, CodexImportResult,
     CodexUsageLimitSnapshot,
@@ -19,8 +20,8 @@ use crate::importers::custom_sqlite::{
     import_custom_sqlite_profile, preview_custom_sqlite_importer, validate_profile_input,
 };
 use crate::importers::{
-    detect_local_agents as detect_agents, import_detected_agents_with_mode as import_agents,
-    source_keys_for_agent,
+    detect_local_agents as detect_agents, import_detected_agents_since as import_agents_since,
+    import_detected_agents_with_mode as import_agents, source_keys_for_agent,
 };
 use crate::importers::{AgentImportResult, ImportMode, LocalAgentStatus};
 use crate::AppState;
@@ -523,6 +524,112 @@ pub async fn run_background_sync_once(state: State<'_, AppState>) -> Result<Sync
     );
 
     Ok(settings)
+}
+
+#[tauri::command]
+pub async fn sync_today_token_pulse_data(
+    state: State<'_, AppState>,
+) -> Result<SyncRunResult, String> {
+    let started = Instant::now();
+    let now = Local::now();
+    let today = now.date_naive();
+    let today_label = today.to_string();
+    let started_at = now.to_rfc3339();
+    let Some(_guard) = state.sync_runtime.try_start() else {
+        let finished_at = Local::now().to_rfc3339();
+        return Ok(SyncRunResult {
+            status: "busy".to_string(),
+            message: "已有同步任务正在执行。".to_string(),
+            imported: 0,
+            skipped: 0,
+            started_at,
+            finished_at,
+        });
+    };
+
+    let today_start = local_date_start(today)?;
+    let import_started = Instant::now();
+    let results = import_agents_since(&state.repository, today_start).await;
+    let imported = results.iter().map(|result| result.imported).sum();
+    let skipped = results.iter().map(|result| result.skipped).sum();
+    let failed = results.iter().any(|result| result.status == "error");
+    eprintln!(
+        "[tokenscope][perf] command.sync_today_token_pulse_data.import elapsed_ms={} imported={} skipped={} failed={}",
+        import_started.elapsed().as_millis(),
+        imported,
+        skipped,
+        failed
+    );
+
+    let mut status = if failed { "error" } else { "success" }.to_string();
+    let local_message = if results.is_empty() {
+        "未检测到可同步的本机 Agent 数据源。".to_string()
+    } else {
+        results
+            .iter()
+            .map(|result| format!("{}: {}", result.name, result.message))
+            .collect::<Vec<_>>()
+            .join("；")
+    };
+    let github_message = if failed {
+        "GitHub 今日同步已跳过：本机今日数据同步失败。".to_string()
+    } else {
+        let github_started = Instant::now();
+        match github_sync::engine::sync_today_with_runtime(
+            &state.repository,
+            &state.github_sync_runtime,
+            &today_label,
+        )
+        .await
+        {
+            Ok(result) => {
+                eprintln!(
+                    "[tokenscope][perf] command.sync_today_token_pulse_data.github elapsed_ms={} status={}",
+                    github_started.elapsed().as_millis(),
+                    result.status
+                );
+                if result.status == "busy" {
+                    status = "busy".to_string();
+                }
+                result.message
+            }
+            Err(err) => {
+                eprintln!(
+                    "[tokenscope][perf] command.sync_today_token_pulse_data.github elapsed_ms={} status=error",
+                    github_started.elapsed().as_millis()
+                );
+                status = "error".to_string();
+                format!("GitHub 今日同步失败：{err}")
+            }
+        }
+    };
+    let finished_at = Local::now().to_rfc3339();
+    eprintln!(
+        "[tokenscope][perf] command.sync_today_token_pulse_data.total elapsed_ms={} status={} imported={} skipped={}",
+        started.elapsed().as_millis(),
+        status,
+        imported,
+        skipped
+    );
+
+    Ok(SyncRunResult {
+        status,
+        message: format!("今日数据同步完成：{local_message}；{github_message}"),
+        imported,
+        skipped,
+        started_at,
+        finished_at,
+    })
+}
+
+fn local_date_start(date: NaiveDate) -> Result<DateTime<Local>, String> {
+    let Some(naive) = date.and_hms_opt(0, 0, 0) else {
+        return Err(format!("invalid local date: {date}"));
+    };
+    Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .ok_or_else(|| format!("invalid local date: {date}"))
 }
 
 fn merge_agent_source_summaries(

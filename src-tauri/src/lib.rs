@@ -103,6 +103,7 @@ pub fn run() {
             commands::dashboard::get_sync_settings,
             commands::dashboard::save_sync_settings,
             commands::dashboard::run_background_sync_once,
+            commands::dashboard::sync_today_token_pulse_data,
             commands::settings::export_calls_csv,
             commands::settings::export_device_dataset_package,
             commands::settings::import_device_dataset_package,

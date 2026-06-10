@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{
@@ -24,6 +24,7 @@ pub enum SyncRunMode {
     Normal,
     ForceBootstrap,
     ForceRemoteReimport,
+    Today,
 }
 
 impl SyncRunMode {
@@ -32,6 +33,7 @@ impl SyncRunMode {
             SyncRunMode::Normal => "normal",
             SyncRunMode::ForceBootstrap => "force_bootstrap",
             SyncRunMode::ForceRemoteReimport => "force_remote_reimport",
+            SyncRunMode::Today => "today",
         }
     }
 }
@@ -299,6 +301,24 @@ pub async fn force_reimport_remote_device_with_runtime(
     result
 }
 
+pub async fn sync_today_with_runtime(
+    repository: &TokenScopeRepository,
+    runtime: &GitHubSyncRuntime,
+    date_local: &str,
+) -> Result<GitHubSyncRunResult, String> {
+    let Some(guard) = runtime.try_start(SyncRunMode::Today) else {
+        return Ok(busy_result(runtime.status()));
+    };
+
+    let result = sync_today_inner(repository, date_local, Some(runtime)).await;
+    record_error_result(repository, &result).await;
+    match &result {
+        Ok(result) => runtime.finish(&guard, &result.status, &result.message),
+        Err(err) => runtime.finish(&guard, "error", err),
+    }
+    result
+}
+
 async fn run_once_inner(
     repository: &TokenScopeRepository,
     force_bootstrap: bool,
@@ -337,6 +357,36 @@ async fn run_once_inner(
         runtime,
     )
     .await
+}
+
+async fn sync_today_inner(
+    repository: &TokenScopeRepository,
+    date_local: &str,
+    runtime: Option<&GitHubSyncRuntime>,
+) -> Result<GitHubSyncRunResult, String> {
+    if let Some(runtime) = runtime {
+        runtime.update_phase("prepare", "读取 GitHub 同步配置");
+    }
+    let settings = repository
+        .get_github_sync_settings()
+        .await
+        .map_err(|err| err.to_string())?;
+    if !settings.enabled {
+        return Ok(disabled_result());
+    }
+    let token = repository
+        .github_sync_secret("token")
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "GitHub personal access token 未配置。".to_string())?;
+    let transport = GitHubContentsClient::new(
+        settings.owner.clone(),
+        settings.repo.clone(),
+        settings.branch.clone(),
+        token,
+    );
+
+    sync_today_with_settings(repository, &transport, settings, date_local, runtime).await
 }
 
 async fn force_reimport_remote_device_inner(
@@ -387,6 +437,21 @@ pub async fn run_github_sync_once_with_transport<T: GitHubSyncTransport>(
         .await
         .map_err(|err| err.to_string())?;
     let result = run_with_settings(repository, transport, mode, settings, None).await;
+    record_error_result(repository, &result).await;
+    result
+}
+
+#[cfg(test)]
+pub async fn sync_today_with_transport<T: GitHubSyncTransport>(
+    repository: &TokenScopeRepository,
+    transport: &T,
+    date_local: &str,
+) -> Result<GitHubSyncRunResult, String> {
+    let settings = repository
+        .get_github_sync_settings()
+        .await
+        .map_err(|err| err.to_string())?;
+    let result = sync_today_with_settings(repository, transport, settings, date_local, None).await;
     record_error_result(repository, &result).await;
     result
 }
@@ -688,6 +753,145 @@ async fn run_with_settings<T: GitHubSyncTransport>(
     })
 }
 
+async fn sync_today_with_settings<T: GitHubSyncTransport>(
+    repository: &TokenScopeRepository,
+    transport: &T,
+    settings: GitHubSyncSettings,
+    date_local: &str,
+    runtime: Option<&GitHubSyncRuntime>,
+) -> Result<GitHubSyncRunResult, String> {
+    let started_at = Local::now().to_rfc3339();
+    let date_local = normalize_day_date(date_local)?;
+    if !settings.enabled {
+        return Ok(disabled_result_with_started_at(started_at));
+    }
+    let sync_password = repository
+        .github_sync_secret("sync_password")
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "GitHub 同步密码未配置。".to_string())?;
+    let device_id = repository
+        .get_or_create_local_device_id()
+        .await
+        .map_err(|err| err.to_string())?;
+    let layout = GitHubSyncLayout::new(settings.path_prefix.clone());
+
+    if let Some(runtime) = runtime {
+        runtime.update_progress(
+            "upload",
+            format!("检查本机今日 day 分片 {date_local}"),
+            1,
+            1,
+        );
+    }
+    let package = export_local_github_sync_package(
+        repository,
+        GitHubSyncShardSelector::Day(date_local.clone()),
+        &settings.data_mode,
+    )
+    .await?;
+    let plaintext = package_bytes(&package)?;
+    let hash = package_content_hash(&package)?;
+    let existing = repository
+        .github_sync_shard(&device_id, "day", Some(&date_local))
+        .await
+        .map_err(|err| err.to_string())?;
+    let has_local_data = package.date_locals().contains(&date_local);
+    let mut uploaded_shards = 0;
+    if has_local_data || existing.is_some() {
+        if existing
+            .as_ref()
+            .map(|state| state.content_hash.as_str() == hash)
+            .unwrap_or(false)
+        {
+            // The local day shard is unchanged; keep the recorded remote blob.
+        } else {
+            let path = layout.day_path(&device_id, &date_local);
+            if let Some(runtime) = runtime {
+                runtime.update_progress(
+                    "upload",
+                    format!("上传本机今日 day 分片 {date_local}"),
+                    1,
+                    1,
+                );
+            }
+            let uploaded_file = upload_plaintext(
+                transport,
+                &path,
+                &plaintext,
+                &sync_password,
+                &format!("sync TokenScope day {date_local}"),
+            )
+            .await?;
+            repository
+                .record_github_sync_shard(&GitHubSyncShardStateInput {
+                    device_id: device_id.clone(),
+                    shard_kind: "day".to_string(),
+                    shard_date: Some(date_local.clone()),
+                    content_hash: hash,
+                    github_blob_sha: Some(uploaded_file.sha),
+                    github_path: path,
+                    imported_at: None,
+                })
+                .await
+                .map_err(|err| err.to_string())?;
+            uploaded_shards += 1;
+        }
+    }
+
+    if let Some(runtime) = runtime {
+        runtime.update_phase("download", format!("读取远端今日 day 分片 {date_local}"));
+    }
+    let download_summary = download_remote_today_updates(
+        repository,
+        transport,
+        &layout,
+        &device_id,
+        &date_local,
+        &sync_password,
+        uploaded_shards,
+        runtime,
+    )
+    .await?;
+    if let Some(runtime) = runtime {
+        runtime.update_counts(uploaded_shards, &download_summary);
+    }
+
+    let finished_at = Local::now().to_rfc3339();
+    let message = format!(
+        "GitHub 今日同步完成：上传 {uploaded_shards} 个本机分片，下载 {} 个远端分片，导入 {} 条记录。",
+        download_summary.downloaded_shards, download_summary.imported
+    );
+    repository
+        .record_github_sync_run(
+            "success",
+            &message,
+            if uploaded_shards > 0 {
+                Some(&finished_at)
+            } else {
+                None
+            },
+            if download_summary.downloaded_shards > 0 {
+                Some(&finished_at)
+            } else {
+                None
+            },
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+    Ok(GitHubSyncRunResult {
+        status: "success".to_string(),
+        message,
+        uploaded_shards,
+        downloaded_shards: download_summary.downloaded_shards,
+        imported: download_summary.imported,
+        skipped: download_summary.skipped,
+        started_at,
+        finished_at,
+    })
+}
+
 async fn download_remote_updates<T: GitHubSyncTransport>(
     repository: &TokenScopeRepository,
     transport: &T,
@@ -867,6 +1071,66 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
     Ok(())
 }
 
+async fn download_remote_today_updates<T: GitHubSyncTransport>(
+    repository: &TokenScopeRepository,
+    transport: &T,
+    layout: &GitHubSyncLayout,
+    local_device_id: &str,
+    date_local: &str,
+    sync_password: &str,
+    uploaded_shards: i64,
+    runtime: Option<&GitHubSyncRuntime>,
+) -> Result<GitHubSyncDownloadSummary, String> {
+    let mut summary = GitHubSyncDownloadSummary::default();
+    let mut device_ids = transport.list_device_dirs(layout).await?;
+    device_ids.sort();
+    device_ids.dedup();
+
+    let total_devices = device_ids.len() as i64;
+    for (device_index, remote_device_id) in device_ids.into_iter().enumerate() {
+        if remote_device_id == local_device_id {
+            continue;
+        }
+        if let Some(runtime) = runtime {
+            runtime.update_progress(
+                "download",
+                format!(
+                    "导入远端今日 day 分片 {} ({}/{})",
+                    remote_device_id,
+                    device_index + 1,
+                    total_devices
+                ),
+                (device_index + 1) as i64,
+                total_devices,
+            );
+        }
+
+        let remote_data_mode =
+            remote_manifest_data_mode(transport, layout, &remote_device_id, sync_password).await?;
+        repository
+            .update_external_dataset_sync_data_mode_for_device(&remote_device_id, &remote_data_mode)
+            .await
+            .map_err(|err| err.to_string())?;
+        let day_path = layout.day_path(&remote_device_id, date_local);
+        import_remote_shard(
+            repository,
+            transport,
+            &day_path,
+            None,
+            sync_password,
+            false,
+            Some(remote_data_mode.as_str()),
+            &mut summary,
+        )
+        .await?;
+        if let Some(runtime) = runtime {
+            runtime.update_counts(uploaded_shards, &summary);
+        }
+    }
+
+    Ok(summary)
+}
+
 async fn import_remote_shard<T: GitHubSyncTransport>(
     repository: &TokenScopeRepository,
     transport: &T,
@@ -961,6 +1225,12 @@ fn parse_day_file_date(name: &str) -> Option<String> {
         && bytes[8..].iter().all(u8::is_ascii_digit);
 
     is_iso_date_name.then(|| date.to_string())
+}
+
+fn normalize_day_date(date_local: &str) -> Result<String, String> {
+    NaiveDate::parse_from_str(date_local, "%Y-%m-%d")
+        .map(|date| date.to_string())
+        .map_err(|_| format!("GitHub 同步日期无效：{date_local}"))
 }
 
 async fn upload_package<T: GitHubSyncTransport>(
@@ -1369,6 +1639,63 @@ mod tests {
 
         assert!(bootstrap.content.starts_with(b"TSGS2"));
         assert!(!bootstrap.content.starts_with(b"{"));
+    }
+
+    #[tokio::test]
+    async fn today_sync_uploads_and_downloads_only_selected_day() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        insert_test_call(&repository, "local-today", "2026-06-05", 100).await;
+        insert_test_call(&repository, "local-yesterday", "2026-06-04", 200).await;
+
+        let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
+        let transport = FakeGitHubTransport::default();
+        let remote_today_path = layout.day_path("remote-a", "2026-06-05");
+        let remote_yesterday_path = layout.day_path("remote-a", "2026-06-04");
+        transport.seed_file(
+            &remote_today_path,
+            encrypted_package_bytes(
+                &remote_day_package("remote-a", "2026-06-05", 300),
+                "sync-password",
+            ),
+        );
+        transport.seed_file(
+            &remote_yesterday_path,
+            encrypted_package_bytes(
+                &remote_day_package("remote-a", "2026-06-04", 400),
+                "sync-password",
+            ),
+        );
+
+        let result = sync_today_with_transport(&repository, &transport, "2026-06-05")
+            .await
+            .expect("today sync succeeds");
+
+        assert_eq!(result.uploaded_shards, 1);
+        assert!(transport
+            .uploaded_path("days/2026-06-05.tokenscope.zst.enc")
+            .contains("2026-06-05"));
+        let local_device_id = repository
+            .get_or_create_local_device_id()
+            .await
+            .expect("local device id exists");
+        assert!(transport
+            .uploaded_path(&layout.day_path(&local_device_id, "2026-06-04"))
+            .is_empty());
+        assert_eq!(
+            imported_token_sum(&repository, "device-remote-a", "2026-06-05").await,
+            300
+        );
+        assert_eq!(
+            imported_token_sum(&repository, "device-remote-a", "2026-06-04").await,
+            0
+        );
+        assert_eq!(transport.get_file_count_for(&remote_today_path), 1);
+        assert_eq!(transport.get_file_count_for(&remote_yesterday_path), 0);
     }
 
     #[tokio::test]

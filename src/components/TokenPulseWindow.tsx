@@ -17,11 +17,11 @@ import {
   getTokenPulsePositionLocked,
   hideTokenPulseWindow,
   openTokenPulseHome,
-  runBackgroundSyncOnce,
   setTokenPulseDetailHovered,
   setTokenPulseDragging,
   setTokenPulsePositionLocked,
   showTokenPulseContextMenu,
+  syncTodayTokenPulseData,
 } from "../services/dashboard";
 import type {
   CodexUsageLimitSnapshot,
@@ -1280,11 +1280,11 @@ export function TokenPulseWindow() {
       : Promise.resolve();
     try {
       try {
-        const syncStartedAt = performance.now();
+        const todaySyncStartedAt = performance.now();
         try {
-          await runBackgroundSyncOnce();
+          await syncTodayTokenPulseData();
         } finally {
-          logTokenPulsePerf("manual_refresh.background_sync", syncStartedAt);
+          logTokenPulsePerf("manual_refresh.today_sync", todaySyncStartedAt);
         }
       } finally {
         const pulseStartedAt = performance.now();

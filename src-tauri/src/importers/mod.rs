@@ -48,6 +48,11 @@ impl ImportScope {
     }
 }
 
+enum ImportScopeMode {
+    Cursor(ImportMode),
+    Fixed(ImportScope),
+}
+
 pub trait AgentImporter: Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
@@ -143,9 +148,27 @@ pub async fn import_detected_agents(repository: &TokenScopeRepository) -> Vec<Ag
     import_detected_agents_with_mode(repository, ImportMode::Incremental).await
 }
 
+pub async fn import_detected_agents_since(
+    repository: &TokenScopeRepository,
+    since: DateTime<Local>,
+) -> Vec<AgentImportResult> {
+    import_detected_agents_with_scope_mode(
+        repository,
+        ImportScopeMode::Fixed(ImportScope::incremental(Some(since))),
+    )
+    .await
+}
+
 pub async fn import_detected_agents_with_mode(
     repository: &TokenScopeRepository,
     mode: ImportMode,
+) -> Vec<AgentImportResult> {
+    import_detected_agents_with_scope_mode(repository, ImportScopeMode::Cursor(mode)).await
+}
+
+async fn import_detected_agents_with_scope_mode(
+    repository: &TokenScopeRepository,
+    scope_mode: ImportScopeMode,
 ) -> Vec<AgentImportResult> {
     let mut results = Vec::new();
     for importer in agent_importers() {
@@ -161,7 +184,11 @@ pub async fn import_detected_agents_with_mode(
         }
 
         let cursor_at = Local::now().to_rfc3339();
-        let scope = match import_scope(repository, importer.id(), mode).await {
+        let scope = match &scope_mode {
+            ImportScopeMode::Cursor(mode) => import_scope(repository, importer.id(), *mode).await,
+            ImportScopeMode::Fixed(scope) => Ok(scope.clone()),
+        };
+        let scope = match scope {
             Ok(scope) => scope,
             Err(err) => {
                 results.push(AgentImportResult::failed(
@@ -176,13 +203,13 @@ pub async fn import_detected_agents_with_mode(
         let import_started = Instant::now();
         let mut result = importer.import(repository, &status, &scope).await;
         eprintln!(
-            "[tokenscope][perf] importer.{} elapsed_ms={} status={} imported={} skipped={} mode={:?}",
+            "[tokenscope][perf] importer.{} elapsed_ms={} status={} imported={} skipped={} mode={}",
             importer.id(),
             import_started.elapsed().as_millis(),
             result.status,
             result.imported,
             result.skipped,
-            mode
+            scope_mode_label(&scope_mode)
         );
         if result.status == "success" {
             if let Err(err) = repository
@@ -200,6 +227,14 @@ pub async fn import_detected_agents_with_mode(
     }
 
     results
+}
+
+fn scope_mode_label(scope_mode: &ImportScopeMode) -> &'static str {
+    match scope_mode {
+        ImportScopeMode::Cursor(ImportMode::Incremental) => "incremental",
+        ImportScopeMode::Cursor(ImportMode::Full) => "full",
+        ImportScopeMode::Fixed(_) => "fixed",
+    }
 }
 
 async fn import_scope(

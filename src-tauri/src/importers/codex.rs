@@ -1,8 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use chrono::{DateTime, Duration, Local, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,47 @@ const CODEX_THREAD_SOURCE: &str = "codex_state_threads";
 const CODEX_ROLLOUT_SOURCE: &str = "codex_rollout_token_counts";
 const CODEX_GENERAL_LIMIT_ID: &str = "codex";
 const CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES: i64 = 15;
+
+static CODEX_USAGE_LIMIT_SCAN_CACHE: OnceLock<Mutex<CodexUsageLimitScanCache>> = OnceLock::new();
+
+#[derive(Debug, Default)]
+struct CodexUsageLimitScanCache {
+    roots: HashMap<PathBuf, CodexUsageLimitRootState>,
+}
+
+#[derive(Debug, Default)]
+struct CodexUsageLimitRootState {
+    files: HashMap<PathBuf, CodexUsageLimitFileState>,
+}
+
+#[derive(Debug, Clone)]
+struct CodexUsageLimitFileState {
+    len: u64,
+    modified: Option<SystemTime>,
+    line_count: usize,
+    latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CodexUsageLimitScanStats {
+    files: usize,
+    read_files: usize,
+    reused_files: usize,
+    failed_files: usize,
+    total_bytes: u64,
+    bytes_read: u64,
+    scanned_lines: u64,
+    snapshots: u64,
+}
+
+#[derive(Debug)]
+struct CodexUsageLimitFileRead {
+    latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    scanned_lines: u64,
+    snapshots: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexImportResult {
@@ -119,91 +161,216 @@ pub fn get_default_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot
 pub fn latest_codex_usage_limits_from_sessions_path(
     sessions_path: &Path,
 ) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    latest_codex_usage_limits_from_sessions_path_with_stats(sessions_path)
+        .map(|(snapshot, _)| snapshot)
+}
+
+fn latest_codex_usage_limits_from_sessions_path_with_stats(
+    sessions_path: &Path,
+) -> Result<(Option<CodexUsageLimitSnapshot>, CodexUsageLimitScanStats), String> {
     let started = Instant::now();
     if !sessions_path.exists() {
         eprintln!(
             "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files=0 bytes=0 lines=0 snapshots=0 found=false missing_path=true",
             started.elapsed().as_millis()
         );
-        return Ok(None);
+        return Ok((None, CodexUsageLimitScanStats::default()));
     }
+
+    let cache = CODEX_USAGE_LIMIT_SCAN_CACHE.get_or_init(|| {
+        Mutex::new(CodexUsageLimitScanCache {
+            roots: HashMap::new(),
+        })
+    });
+    let mut cache = cache.lock().map_err(|err| err.to_string())?;
+    let root_state = cache
+        .roots
+        .entry(sessions_path.to_path_buf())
+        .or_insert_with(CodexUsageLimitRootState::default);
 
     let mut rollout_files = Vec::new();
     collect_rollout_jsonl_files(sessions_path, &mut rollout_files)?;
-    let file_count = rollout_files.len();
-    let total_bytes: u64 = rollout_files
-        .iter()
-        .filter_map(|path| fs::metadata(path).ok().map(|metadata| metadata.len()))
-        .sum();
+    let mut stats = CodexUsageLimitScanStats {
+        files: rollout_files.len(),
+        ..CodexUsageLimitScanStats::default()
+    };
+    let mut seen_files = HashSet::new();
 
-    let mut latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
-    let mut latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
-    let mut failed_files = 0;
-    let mut scanned_lines: u64 = 0;
-    let mut snapshots = 0;
     for rollout_path in rollout_files {
-        let Ok(file) = File::open(&rollout_path) else {
-            failed_files += 1;
+        seen_files.insert(rollout_path.clone());
+        let Ok(metadata) = fs::metadata(&rollout_path) else {
+            stats.failed_files += 1;
+            continue;
+        };
+        let len = metadata.len();
+        let modified = metadata.modified().ok();
+        stats.total_bytes += len;
+
+        if root_state
+            .files
+            .get(&rollout_path)
+            .is_some_and(|state| state.len == len && state.modified == modified)
+        {
+            stats.reused_files += 1;
+            continue;
+        }
+
+        let previous = root_state.files.get(&rollout_path).cloned();
+        let append_start = previous
+            .as_ref()
+            .filter(|state| len > state.len)
+            .map(|state| (state.len, state.line_count));
+        let read_start = append_start.map(|(offset, _)| offset).unwrap_or(0);
+        let read = read_codex_usage_limit_file(
+            &rollout_path,
+            read_start,
+            append_start.map(|(_, line_count)| line_count).unwrap_or(0),
+        );
+        let Ok(read) = read else {
+            stats.failed_files += 1;
             continue;
         };
 
-        for (index, line) in BufReader::new(file).lines().enumerate() {
-            scanned_lines += 1;
-            let Ok(line) = line else {
-                continue;
-            };
-            let Some(snapshot) =
-                rollout_line_to_usage_limit_snapshot(&rollout_path, index + 1, &line)
-            else {
-                continue;
-            };
-            snapshots += 1;
-            let Ok(captured_at) = DateTime::parse_from_rfc3339(&snapshot.captured_at) else {
-                continue;
-            };
-            let captured_at = captured_at.with_timezone(&Utc);
-            if snapshot.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID)
-                && latest_general
+        let (latest, latest_general, line_count) =
+            if let Some((_, previous_line_count)) = append_start {
+                let mut latest = previous.as_ref().and_then(|state| state.latest.clone());
+                let mut latest_general = previous
                     .as_ref()
-                    .is_none_or(|(latest_general_at, _)| captured_at > *latest_general_at)
-            {
-                latest_general = Some((captured_at, snapshot.clone()));
-            }
-            if latest
-                .as_ref()
-                .is_none_or(|(latest_at, _)| captured_at > *latest_at)
-            {
-                latest = Some((captured_at, snapshot));
-            }
-        }
+                    .and_then(|state| state.latest_general.clone());
+                merge_latest_snapshot(&mut latest, read.latest);
+                merge_latest_snapshot(&mut latest_general, read.latest_general);
+                (
+                    latest,
+                    latest_general,
+                    previous_line_count + read.scanned_lines as usize,
+                )
+            } else {
+                (
+                    read.latest,
+                    read.latest_general,
+                    read.scanned_lines as usize,
+                )
+            };
+
+        stats.read_files += 1;
+        stats.bytes_read += len.saturating_sub(read_start);
+        stats.scanned_lines += read.scanned_lines;
+        stats.snapshots += read.snapshots;
+        root_state.files.insert(
+            rollout_path,
+            CodexUsageLimitFileState {
+                len,
+                modified,
+                line_count,
+                latest,
+                latest_general,
+            },
+        );
     }
 
-    let result = if let Some((latest_at, _)) = latest {
-        if let Some((latest_general_at, latest_general_snapshot)) = latest_general {
-            let max_staleness = Duration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
-            if latest_at.signed_duration_since(latest_general_at) <= max_staleness {
-                Some(latest_general_snapshot)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    root_state.files.retain(|path, _| seen_files.contains(path));
+
+    let mut latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    let mut latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    for file_state in root_state.files.values() {
+        merge_latest_snapshot(&mut latest, file_state.latest.clone());
+        merge_latest_snapshot(&mut latest_general, file_state.latest_general.clone());
+    }
+
+    let result = select_codex_usage_limit_snapshot(latest, latest_general);
     eprintln!(
-        "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files={} failed_files={} bytes={} lines={} snapshots={} found={}",
+        "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files={} read_files={} reused_files={} failed_files={} bytes={} bytes_read={} lines={} snapshots={} found={}",
         started.elapsed().as_millis(),
-        file_count,
-        failed_files,
-        total_bytes,
-        scanned_lines,
-        snapshots,
+        stats.files,
+        stats.read_files,
+        stats.reused_files,
+        stats.failed_files,
+        stats.total_bytes,
+        stats.bytes_read,
+        stats.scanned_lines,
+        stats.snapshots,
         result.is_some()
     );
 
-    Ok(result)
+    Ok((result, stats))
+}
+
+fn read_codex_usage_limit_file(
+    rollout_path: &Path,
+    start_offset: u64,
+    line_number_offset: usize,
+) -> Result<CodexUsageLimitFileRead, String> {
+    let mut file = File::open(rollout_path).map_err(|err| err.to_string())?;
+    if start_offset > 0 {
+        file.seek(SeekFrom::Start(start_offset))
+            .map_err(|err| err.to_string())?;
+    }
+
+    let mut latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    let mut latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)> = None;
+    let mut scanned_lines = 0;
+    let mut snapshots = 0;
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        scanned_lines += 1;
+        let Ok(line) = line else {
+            continue;
+        };
+        let line_number = line_number_offset + index + 1;
+        let Some(snapshot) = rollout_line_to_usage_limit_snapshot(rollout_path, line_number, &line)
+        else {
+            continue;
+        };
+        let Ok(captured_at) = DateTime::parse_from_rfc3339(&snapshot.captured_at) else {
+            continue;
+        };
+        let captured_at = captured_at.with_timezone(&Utc);
+        snapshots += 1;
+        if snapshot.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID) {
+            merge_latest_snapshot(&mut latest_general, Some((captured_at, snapshot.clone())));
+        }
+        merge_latest_snapshot(&mut latest, Some((captured_at, snapshot)));
+    }
+
+    Ok(CodexUsageLimitFileRead {
+        latest,
+        latest_general,
+        scanned_lines,
+        snapshots,
+    })
+}
+
+fn merge_latest_snapshot(
+    latest: &mut Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    candidate: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+
+    if latest
+        .as_ref()
+        .is_none_or(|(latest_at, _)| candidate.0 > *latest_at)
+    {
+        *latest = Some(candidate);
+    }
+}
+
+fn select_codex_usage_limit_snapshot(
+    latest: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    latest_general: Option<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+) -> Option<CodexUsageLimitSnapshot> {
+    let Some((latest_at, latest_snapshot)) = latest else {
+        return None;
+    };
+
+    if let Some((latest_general_at, latest_general_snapshot)) = latest_general {
+        let max_staleness = Duration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
+        if latest_at.signed_duration_since(latest_general_at) <= max_staleness {
+            return Some(latest_general_snapshot);
+        }
+    }
+
+    Some(latest_snapshot)
 }
 
 pub async fn import_default_codex_threads(
@@ -965,6 +1132,7 @@ fn project_name_from_cwd(cwd: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
 
     use chrono::{DateTime, Local, Utc};
@@ -978,7 +1146,9 @@ mod tests {
 
     use super::{
         import_codex_threads_from_path, import_codex_threads_from_path_with_scope,
-        latest_codex_usage_limits_from_sessions_path, rollout_line_to_usage_limit_snapshot,
+        latest_codex_usage_limits_from_sessions_path,
+        latest_codex_usage_limits_from_sessions_path_with_stats,
+        rollout_line_to_usage_limit_snapshot,
     };
 
     #[test]
@@ -1059,7 +1229,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_model_specific_codex_usage_limit_without_general_snapshot() {
+    fn uses_model_specific_codex_usage_limit_without_general_snapshot() {
         let sessions_path =
             std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
         let nested_path = sessions_path.join("2026").join("06");
@@ -1070,9 +1240,70 @@ mod tests {
         );
 
         let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
-            .expect("session rollouts are scanned");
+            .expect("session rollouts are scanned")
+            .expect("model-specific rate limit snapshot is accepted");
 
-        assert!(snapshot.is_none());
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex_bengalfox"));
+        assert_eq!(snapshot.limit_name.as_deref(), Some("GPT-5.3-Codex-Spark"));
+        assert_eq!(snapshot.primary.remaining_percent, 100.0);
+        assert!(snapshot.source_path.ends_with("spark.jsonl"));
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
+
+    #[test]
+    fn reuses_unchanged_rollouts_and_reads_appended_usage_limit_lines() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        let rollout_path = nested_path.join("rollout.jsonl");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &rollout_path,
+            r#"{"timestamp":"2026-06-06T07:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1780746000,"used_percent":10.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":20.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+
+        let (snapshot, first_stats) =
+            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+                .expect("initial session rollouts are scanned");
+        assert_eq!(
+            snapshot
+                .expect("initial snapshot exists")
+                .primary
+                .remaining_percent,
+            90.0
+        );
+        assert_eq!(first_stats.read_files, 1);
+        assert_eq!(first_stats.reused_files, 0);
+        assert_eq!(first_stats.scanned_lines, 1);
+
+        let (_, second_stats) =
+            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+                .expect("unchanged session rollouts are reused");
+        assert_eq!(second_stats.read_files, 0);
+        assert_eq!(second_stats.reused_files, 1);
+        assert_eq!(second_stats.scanned_lines, 0);
+
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout_path)
+            .expect("rollout fixture opens for append");
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-06-06T07:35:24.355Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"limit_id":"codex","plan_type":"pro","primary":{{"resets_at":1780746229,"used_percent":5.0,"window_minutes":300}},"secondary":{{"resets_at":1781141316,"used_percent":18.0,"window_minutes":10080}}}},"info":{{"last_token_usage":{{"input_tokens":1200,"output_tokens":300,"total_tokens":1500}}}}}}}}"#
+        )
+        .expect("rollout fixture append succeeds");
+
+        let (snapshot, third_stats) =
+            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+                .expect("appended session rollout line is scanned");
+        let snapshot = snapshot.expect("appended snapshot exists");
+        assert_eq!(snapshot.captured_at, "2026-06-06T07:35:24.355Z");
+        assert_eq!(snapshot.line_number, 2);
+        assert_eq!(snapshot.primary.remaining_percent, 95.0);
+        assert_eq!(third_stats.read_files, 1);
+        assert_eq!(third_stats.reused_files, 0);
+        assert_eq!(third_stats.scanned_lines, 1);
 
         fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
     }

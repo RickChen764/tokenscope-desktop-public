@@ -25,6 +25,7 @@ import type {
   LlmCallPage,
   LlmCallRow,
   LocalAgentStatus,
+  SyncRunResult,
   SyncSettings,
   SyncSettingsInput,
   AppUpdateInfo,
@@ -648,6 +649,21 @@ export async function runBackgroundSyncOnce() {
   }
 
   return invoke<SyncSettings>("run_background_sync_once");
+}
+
+export function syncTodayTokenPulseData() {
+  return invokeOrFallback<SyncRunResult>(
+    "sync_today_token_pulse_data",
+    {},
+    {
+      status: "browser-preview",
+      message: tr("浏览器预览环境已跳过今日数据同步。"),
+      imported: 0,
+      skipped: 0,
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+    },
+  );
 }
 
 export function getGitHubSyncSettings() {

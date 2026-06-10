@@ -85,6 +85,15 @@ export interface SyncSettings extends SyncSettingsInput {
   last_error: string | null;
 }
 
+export interface SyncRunResult {
+  status: string;
+  message: string;
+  imported: number;
+  skipped: number;
+  started_at: string;
+  finished_at: string;
+}
+
 export type GitHubSyncDataMode = "aggregate_v3" | "detail_v2";
 
 export interface GitHubSyncSettingsInput {
