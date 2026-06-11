@@ -199,12 +199,22 @@ pub fn latest_codex_usage_limits_from_sessions_path(
 }
 
 #[cfg(test)]
+fn codex_usage_limit_test_now() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .expect("fixed test timestamp parses")
+        .with_timezone(&Utc)
+}
+
+#[cfg(test)]
 fn latest_codex_usage_limits_from_sessions_path_with_stats(
     sessions_path: &Path,
 ) -> Result<(Option<CodexUsageLimitSnapshot>, CodexUsageLimitScanStats), String> {
     let read = read_codex_usage_limit_root(sessions_path, false)?;
-    let snapshot =
-        select_codex_usage_limit_snapshot(read.latest_candidates, read.latest_general_candidates);
+    let snapshot = select_codex_usage_limit_snapshot_at(
+        read.latest_candidates,
+        read.latest_general_candidates,
+        codex_usage_limit_test_now(),
+    );
     Ok((snapshot, read.stats))
 }
 
@@ -213,14 +223,25 @@ fn latest_codex_usage_limits_from_sessions_path_with_stats_force(
     sessions_path: &Path,
 ) -> Result<(Option<CodexUsageLimitSnapshot>, CodexUsageLimitScanStats), String> {
     let read = read_codex_usage_limit_root(sessions_path, true)?;
-    let snapshot =
-        select_codex_usage_limit_snapshot(read.latest_candidates, read.latest_general_candidates);
+    let snapshot = select_codex_usage_limit_snapshot_at(
+        read.latest_candidates,
+        read.latest_general_candidates,
+        codex_usage_limit_test_now(),
+    );
     Ok((snapshot, read.stats))
 }
 
 fn latest_codex_usage_limits_from_roots(
     roots: &[PathBuf],
     force_refresh: bool,
+) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    latest_codex_usage_limits_from_roots_at(roots, force_refresh, Utc::now())
+}
+
+fn latest_codex_usage_limits_from_roots_at(
+    roots: &[PathBuf],
+    force_refresh: bool,
+    now: DateTime<Utc>,
 ) -> Result<Option<CodexUsageLimitSnapshot>, String> {
     let mut latest_candidates = Vec::new();
     let mut latest_general_candidates = Vec::new();
@@ -231,9 +252,10 @@ fn latest_codex_usage_limits_from_roots(
         latest_general_candidates.extend(read.latest_general_candidates);
     }
 
-    Ok(select_codex_usage_limit_snapshot(
+    Ok(select_codex_usage_limit_snapshot_at(
         latest_candidates,
         latest_general_candidates,
+        now,
     ))
 }
 
@@ -273,9 +295,10 @@ fn read_codex_usage_limit_root(
             previous_state.as_ref()
         {
             if scanned_at.elapsed() <= CODEX_USAGE_LIMIT_SCAN_CACHE_TTL {
-                let result = select_codex_usage_limit_snapshot(
+                let result = select_codex_usage_limit_snapshot_at(
                     latest_candidates.clone(),
                     latest_general_candidates.clone(),
+                    Utc::now(),
                 );
                 #[cfg(test)]
                 let stats = CodexUsageLimitScanStats {
@@ -389,9 +412,10 @@ fn read_codex_usage_limit_root(
         }
     }
 
-    let result = select_codex_usage_limit_snapshot(
+    let result = select_codex_usage_limit_snapshot_at(
         latest_candidates.clone(),
         latest_general_candidates.clone(),
+        Utc::now(),
     );
     {
         let mut cache = codex_usage_limit_scan_cache()
@@ -490,15 +514,31 @@ fn merge_latest_snapshot(
     }
 }
 
-fn select_codex_usage_limit_snapshot(
+fn select_codex_usage_limit_snapshot_at(
     _latest_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
     latest_general_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    now: DateTime<Utc>,
 ) -> Option<CodexUsageLimitSnapshot> {
-    select_general_codex_usage_limit_snapshot(latest_general_candidates)
+    let snapshot = select_general_codex_usage_limit_snapshot(latest_general_candidates)?;
+    if codex_usage_limit_snapshot_has_active_window(&snapshot, now) {
+        Some(snapshot)
+    } else {
+        None
+    }
 }
 
 fn is_general_codex_usage_limit_snapshot(snapshot: &CodexUsageLimitSnapshot) -> bool {
     snapshot.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID)
+}
+
+fn codex_usage_limit_snapshot_has_active_window(
+    snapshot: &CodexUsageLimitSnapshot,
+    now: DateTime<Utc>,
+) -> bool {
+    let now_timestamp = now.timestamp();
+    [snapshot.primary.resets_at, snapshot.secondary.resets_at]
+        .into_iter()
+        .any(|resets_at| resets_at.is_none_or(|timestamp| timestamp > now_timestamp))
 }
 
 fn select_general_codex_usage_limit_snapshot(
@@ -1349,8 +1389,9 @@ mod tests {
     use crate::importers::ImportScope;
 
     use super::{
-        import_codex_threads_from_path, import_codex_threads_from_path_with_scope,
-        latest_codex_usage_limits_from_roots, latest_codex_usage_limits_from_sessions_path,
+        codex_usage_limit_test_now, import_codex_threads_from_path,
+        import_codex_threads_from_path_with_scope, latest_codex_usage_limits_from_roots,
+        latest_codex_usage_limits_from_roots_at, latest_codex_usage_limits_from_sessions_path,
         latest_codex_usage_limits_from_sessions_path_with_stats,
         latest_codex_usage_limits_from_sessions_path_with_stats_force,
         rollout_line_to_usage_limit_snapshot,
@@ -1529,12 +1570,13 @@ mod tests {
             r#"{"timestamp":"2026-06-10T03:01:53.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1781064028,"used_percent":19.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":43.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
         );
 
-        let snapshot = latest_codex_usage_limits_from_roots(
+        let snapshot = latest_codex_usage_limits_from_roots_at(
             &[
                 root_path.join("sessions"),
                 root_path.join("archived_sessions"),
             ],
             false,
+            codex_usage_limit_test_now(),
         )
         .expect("session roots are scanned")
         .expect("rate limit snapshot exists");
@@ -1558,6 +1600,29 @@ mod tests {
         );
 
         let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
+            .expect("session rollouts are scanned");
+
+        assert!(snapshot.is_none());
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
+
+    #[test]
+    fn ignores_expired_subscription_snapshot_when_only_model_specific_limits_are_fresh() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &nested_path.join("expired-general.jsonl"),
+            r#"{"timestamp":"2026-06-11T06:33:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1,"used_percent":0.0,"window_minutes":300},"secondary":{"resets_at":1,"used_percent":0.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+        write_rollout(
+            &nested_path.join("fresh-spark.jsonl"),
+            r#"{"timestamp":"2026-06-11T06:40:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","plan_type":"pro","primary":{"resets_at":4102444800,"used_percent":0.0,"window_minutes":300},"secondary":{"resets_at":4102444800,"used_percent":0.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+
+        let snapshot = latest_codex_usage_limits_from_roots(&[sessions_path.clone()], true)
             .expect("session rollouts are scanned");
 
         assert!(snapshot.is_none());
