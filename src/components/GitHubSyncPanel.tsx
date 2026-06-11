@@ -551,18 +551,14 @@ export function GitHubSyncPanel({ isAppUpdateBusy, onNotice }: GitHubSyncPanelPr
               </small>
             ) : null}
           </div>
-          <div
+          <progress
             className="sync-progress-bar"
             aria-label={t("GitHub 同步进度")}
             aria-valuemax={syncRuntimeStatus.total_steps > 0 ? syncRuntimeStatus.total_steps : undefined}
             aria-valuenow={syncRuntimeStatus.total_steps > 0 ? syncRuntimeStatus.current_step : undefined}
-            role="progressbar"
-          >
-            <span
-              className={syncProgressPercent === null ? "indeterminate" : undefined}
-              style={syncProgressPercent === null ? undefined : { width: `${syncProgressPercent}%` }}
-            />
-          </div>
+            max={100}
+            value={syncProgressPercent ?? undefined}
+          />
           {syncRuntimeStatus.running ? (
             <div className="sync-live-counts">
               <span>{t("上传 {count} 个分片", { count: syncRuntimeStatus.uploaded_shards })}</span>

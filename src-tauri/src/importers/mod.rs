@@ -202,7 +202,7 @@ async fn import_detected_agents_with_scope_mode(
 
         let import_started = Instant::now();
         let mut result = importer.import(repository, &status, &scope).await;
-        eprintln!(
+        crate::perf_log!(
             "[tokenscope][perf] importer.{} elapsed_ms={} status={} imported={} skipped={} mode={}",
             importer.id(),
             import_started.elapsed().as_millis(),

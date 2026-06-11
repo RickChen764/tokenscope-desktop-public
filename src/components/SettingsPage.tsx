@@ -19,7 +19,10 @@ import {
 } from "../services/dashboard";
 import { appUpdateVersionRange } from "../services/appUpdateState";
 import { useI18n, type AppLanguage } from "../i18n";
-import { useDisplayPreference, type NumberDisplayMode } from "../preferences/display";
+import {
+  useDisplayPreference,
+  type NumberDisplayMode,
+} from "../preferences/display";
 import type {
   AgentSourceSummary,
   AppUpdateInfo,
@@ -46,7 +49,9 @@ const emptyUpdateProgress: AppUpdateProgress = {
 type SettingsTabId = "overview" | "sources" | "devices" | "app" | "advanced";
 
 function latestDateTime(values: Array<string | null>) {
-  const sortedValues = values.filter((value): value is string => Boolean(value)).sort();
+  const sortedValues = values
+    .filter((value): value is string => Boolean(value))
+    .sort();
   return sortedValues.length > 0 ? sortedValues[sortedValues.length - 1] : null;
 }
 
@@ -59,12 +64,14 @@ function syncDraftFromSettings(settings: SyncSettings): SyncSettingsInput {
 }
 
 interface SettingsPageProps {
+  isDemoDataEnabled: boolean;
   isSeedLoading: boolean;
   isSyncing: boolean;
   onSeedDemoData: () => Promise<void>;
 }
 
 export function SettingsPage({
+  isDemoDataEnabled,
   isSeedLoading,
   isSyncing,
   onSeedDemoData,
@@ -76,49 +83,56 @@ export function SettingsPage({
     showCodexUsageLimits,
     setShowCodexUsageLimits,
   } = useDisplayPreference();
-  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabId>("overview");
+  const [activeSettingsTab, setActiveSettingsTab] =
+    useState<SettingsTabId>("overview");
   const [sources, setSources] = useState<AgentSourceSummary[]>([]);
   const [isSourcesLoading, setIsSourcesLoading] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
-  const [syncDraft, setSyncDraft] = useState<SyncSettingsInput>(defaultSyncDraft);
+  const [syncDraft, setSyncDraft] =
+    useState<SyncSettingsInput>(defaultSyncDraft);
   const syncDraftRef = useRef<SyncSettingsInput>(defaultSyncDraft);
   const syncSaveRequestRef = useRef(0);
   const [isSyncSettingsLoading, setIsSyncSettingsLoading] = useState(true);
   const [isSavingSyncSettings, setIsSavingSyncSettings] = useState(false);
   const [isRunningBackgroundSync, setIsRunningBackgroundSync] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo>(() => getStoredAppUpdateInfo());
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo>(() =>
+    getStoredAppUpdateInfo(),
+  );
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [updateProgress, setUpdateProgress] =
     useState<AppUpdateProgress>(emptyUpdateProgress);
   const [notice, setNotice] = useState<ToastNoticeValue | null>(null);
 
-  const loadSources = useCallback(async (options?: { showLoading?: boolean }) => {
-    if (options?.showLoading ?? true) {
-      setIsSourcesLoading(true);
-    }
-
-    try {
-      const nextSources = await listAgentSources();
-      setSources(nextSources);
-      return nextSources;
-    } catch (err) {
-      setNotice({
-        kind: "error",
-        message: t("读取本机 Agent 来源失败：{error}", {
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      });
-      return null;
-    } finally {
+  const loadSources = useCallback(
+    async (options?: { showLoading?: boolean }) => {
       if (options?.showLoading ?? true) {
-        setIsSourcesLoading(false);
+        setIsSourcesLoading(true);
       }
-    }
-  }, [t]);
+
+      try {
+        const nextSources = await listAgentSources();
+        setSources(nextSources);
+        return nextSources;
+      } catch (err) {
+        setNotice({
+          kind: "error",
+          message: t("读取本机 Agent 来源失败：{error}", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        });
+        return null;
+      } finally {
+        if (options?.showLoading ?? true) {
+          setIsSourcesLoading(false);
+        }
+      }
+    },
+    [t],
+  );
 
   const applySyncSettings = useCallback((settings: SyncSettings) => {
     const nextDraft = syncDraftFromSettings(settings);
@@ -168,7 +182,9 @@ export function SettingsPage({
     setNotice(null);
     try {
       const detectedAgents = await detectLocalAgents();
-      const detectedCount = detectedAgents.filter((agent) => agent.detected).length;
+      const detectedCount = detectedAgents.filter(
+        (agent) => agent.detected,
+      ).length;
       const syncableCount = detectedAgents.filter(
         (agent) => agent.detected && agent.import_supported,
       ).length;
@@ -178,10 +194,13 @@ export function SettingsPage({
       }
       setNotice({
         kind: "success",
-        message: t("本地 Agent 检测完成：发现 {detectedCount} 个来源，其中 {syncableCount} 个可同步。", {
-          detectedCount,
-          syncableCount,
-        }),
+        message: t(
+          "本地 Agent 检测完成：发现 {detectedCount} 个来源，其中 {syncableCount} 个可同步。",
+          {
+            detectedCount,
+            syncableCount,
+          },
+        ),
       });
     } catch (err) {
       setNotice({
@@ -200,9 +219,17 @@ export function SettingsPage({
     setNotice(null);
     try {
       const results = await importDetectedAgents("incremental");
-      const imported = results.reduce((total, result) => total + result.imported, 0);
-      const skipped = results.reduce((total, result) => total + result.skipped, 0);
-      const failedResults = results.filter((result) => result.status === "error");
+      const imported = results.reduce(
+        (total, result) => total + result.imported,
+        0,
+      );
+      const skipped = results.reduce(
+        (total, result) => total + result.skipped,
+        0,
+      );
+      const failedResults = results.filter(
+        (result) => result.status === "error",
+      );
       const nextSources = await loadSources({ showLoading: false });
       if (!nextSources) {
         return;
@@ -213,24 +240,32 @@ export function SettingsPage({
           .join(language === "zh-CN" ? "；" : "; ");
         setNotice({
           kind: "error",
-          message: t("同步失败：已写入 {imported} 条，跳过 {skipped} 条。{errors}", {
-            errors,
-            imported,
-            skipped,
-          }),
+          message: t(
+            "同步失败：已写入 {imported} 条，跳过 {skipped} 条。{errors}",
+            {
+              errors,
+              imported,
+              skipped,
+            },
+          ),
         });
         return;
       }
       const clearedDemoRows = await clearDemoData();
       const cleanupText =
-        clearedDemoRows > 0 ? t("，清理演示数据 {count} 条", { count: clearedDemoRows }) : "";
+        clearedDemoRows > 0
+          ? t("，清理演示数据 {count} 条", { count: clearedDemoRows })
+          : "";
       setNotice({
         kind: "success",
-        message: t("同步完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。", {
-          cleanupText,
-          imported,
-          skipped,
-        }),
+        message: t(
+          "同步完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。",
+          {
+            cleanupText,
+            imported,
+            skipped,
+          },
+        ),
       });
     } catch (err) {
       setNotice({
@@ -249,7 +284,10 @@ export function SettingsPage({
     setNotice(null);
     try {
       const path = await exportCallsCsv();
-      setNotice({ kind: "success", message: t("CSV 已导出：{path}", { path }) });
+      setNotice({
+        kind: "success",
+        message: t("CSV 已导出：{path}", { path }),
+      });
     } catch (err) {
       setNotice({
         kind: "error",
@@ -267,9 +305,17 @@ export function SettingsPage({
     setNotice(null);
     try {
       const results = await importDetectedAgents("full");
-      const imported = results.reduce((total, result) => total + result.imported, 0);
-      const skipped = results.reduce((total, result) => total + result.skipped, 0);
-      const failedResults = results.filter((result) => result.status === "error");
+      const imported = results.reduce(
+        (total, result) => total + result.imported,
+        0,
+      );
+      const skipped = results.reduce(
+        (total, result) => total + result.skipped,
+        0,
+      );
+      const failedResults = results.filter(
+        (result) => result.status === "error",
+      );
       const nextSources = await loadSources({ showLoading: false });
       if (!nextSources) {
         return;
@@ -280,24 +326,32 @@ export function SettingsPage({
           .join(language === "zh-CN" ? "；" : "; ");
         setNotice({
           kind: "error",
-          message: t("全量刷新失败：已写入 {imported} 条，跳过 {skipped} 条。{errors}", {
-            errors,
-            imported,
-            skipped,
-          }),
+          message: t(
+            "全量刷新失败：已写入 {imported} 条，跳过 {skipped} 条。{errors}",
+            {
+              errors,
+              imported,
+              skipped,
+            },
+          ),
         });
         return;
       }
       const clearedDemoRows = await clearDemoData();
       const cleanupText =
-        clearedDemoRows > 0 ? t("，清理演示数据 {count} 条", { count: clearedDemoRows }) : "";
+        clearedDemoRows > 0
+          ? t("，清理演示数据 {count} 条", { count: clearedDemoRows })
+          : "";
       setNotice({
         kind: "success",
-        message: t("全量刷新完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。", {
-          cleanupText,
-          imported,
-          skipped,
-        }),
+        message: t(
+          "全量刷新完成：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。",
+          {
+            cleanupText,
+            imported,
+            skipped,
+          },
+        ),
       });
     } catch (err) {
       setNotice({
@@ -336,7 +390,10 @@ export function SettingsPage({
     }
   }
 
-  function updateSyncDraft<K extends keyof SyncSettingsInput>(key: K, value: SyncSettingsInput[K]) {
+  function updateSyncDraft<K extends keyof SyncSettingsInput>(
+    key: K,
+    value: SyncSettingsInput[K],
+  ) {
     const nextDraft = { ...syncDraftRef.current, [key]: value };
     syncDraftRef.current = nextDraft;
     setSyncDraft(nextDraft);
@@ -396,7 +453,10 @@ export function SettingsPage({
       const nextUpdateInfo = await checkForAppUpdate();
       setUpdateInfo(nextUpdateInfo);
       const updateVersionLabel =
-        appUpdateVersionRange(nextUpdateInfo.current_version, nextUpdateInfo.version) ??
+        appUpdateVersionRange(
+          nextUpdateInfo.current_version,
+          nextUpdateInfo.version,
+        ) ??
         nextUpdateInfo.version ??
         "";
       setNotice({
@@ -440,7 +500,9 @@ export function SettingsPage({
       });
       setNotice({
         kind: "success",
-        message: t("更新安装程序已启动。Windows 会在安装更新时自动关闭当前应用。"),
+        message: t(
+          "更新安装程序已启动。Windows 会在安装更新时自动关闭当前应用。",
+        ),
       });
     } catch (err) {
       setNotice({
@@ -480,7 +542,10 @@ export function SettingsPage({
     updateProgress.content_length && updateProgress.content_length > 0
       ? Math.min(
           100,
-          Math.round((updateProgress.downloaded_bytes / updateProgress.content_length) * 100),
+          Math.round(
+            (updateProgress.downloaded_bytes / updateProgress.content_length) *
+              100,
+          ),
         )
       : updateProgress.event === "Finished"
         ? 100
@@ -505,14 +570,17 @@ export function SettingsPage({
     updateInfo.checked_at,
     t("\u5c1a\u672a\u68c0\u67e5"),
   );
-  const updateCurrentVersionLabel = updateInfo.current_version || t("\u672a\u77e5");
+  const updateCurrentVersionLabel =
+    updateInfo.current_version || t("\u672a\u77e5");
   const updateAvailableVersionValue = appUpdateVersionRange(
     updateInfo.current_version,
     updateInfo.version,
   );
   const updateAvailableVersionLabel =
     updateAvailableVersionValue ||
-    (updateInfo.status === "current" ? t("\u5df2\u662f\u6700\u65b0\u7248\u672c") : t("\u65e0"));
+    (updateInfo.status === "current"
+      ? t("\u5df2\u662f\u6700\u65b0\u7248\u672c")
+      : t("\u65e0"));
   const updateProgressBytesLabel = updateProgress.content_length
     ? `${formatBytes(updateProgress.downloaded_bytes, language)} / ${formatBytes(
         updateProgress.content_length,
@@ -574,14 +642,24 @@ export function SettingsPage({
     },
   ];
   const activeTabLabel =
-    settingsTabs.find((tab) => tab.id === activeSettingsTab)?.label ?? t("同步概览");
-  const detectedSourceCount = sources.filter((source) => source.detected).length;
+    settingsTabs.find((tab) => tab.id === activeSettingsTab)?.label ??
+    t("同步概览");
+  const detectedSourceCount = sources.filter(
+    (source) => source.detected,
+  ).length;
   const supportedDetectedCount = sources.filter(
     (source) => source.detected && source.import_supported,
   ).length;
-  const totalImportedCalls = sources.reduce((total, source) => total + source.imported_calls, 0);
-  const lastImportedAt = latestDateTime(sources.map((source) => source.last_imported_at));
-  const lastCallAt = latestDateTime(sources.map((source) => source.last_call_at));
+  const totalImportedCalls = sources.reduce(
+    (total, source) => total + source.imported_calls,
+    0,
+  );
+  const lastImportedAt = latestDateTime(
+    sources.map((source) => source.last_imported_at),
+  );
+  const lastCallAt = latestDateTime(
+    sources.map((source) => source.last_call_at),
+  );
   const sourceSummaryLabel = isSourcesLoading
     ? t("读取中...")
     : `${detectedSourceCount}/${sources.length}`;
@@ -607,13 +685,19 @@ export function SettingsPage({
   const issueSummaryLabel = isSyncSettingsLoading
     ? t("读取中...")
     : syncSettings?.last_error || updateInfo.error || t("无");
-  const issueSummaryHasError = Boolean(syncSettings?.last_error || updateInfo.error);
+  const issueSummaryHasError = Boolean(
+    syncSettings?.last_error || updateInfo.error,
+  );
 
   return (
     <section className="settings-page">
       <ToastNotice notice={notice} onClose={() => setNotice(null)} />
 
-      <nav className="settings-tab-list" role="tablist" aria-label={t("设置分类")}>
+      <nav
+        className="settings-tab-list"
+        role="tablist"
+        aria-label={t("设置分类")}
+      >
         {settingsTabs.map((tab) => (
           <button
             aria-controls={`settings-panel-${tab.id}`}
@@ -655,14 +739,18 @@ export function SettingsPage({
             <article className="settings-summary-card">
               <span>{t("已导入调用")}</span>
               <strong>{sourceImportedLabel}</strong>
-              <small>{t("最近导入 {time}", { time: sourceLastImportedLabel })}</small>
+              <small>
+                {t("最近导入 {time}", { time: sourceLastImportedLabel })}
+              </small>
             </article>
             <article className="settings-summary-card">
               <span>{t("后台同步")}</span>
               <strong>{syncEnabledLabel}</strong>
               <small>{syncIntervalLabel}</small>
             </article>
-            <article className={`settings-summary-card${issueSummaryHasError ? " attention" : ""}`}>
+            <article
+              className={`settings-summary-card${issueSummaryHasError ? " attention" : ""}`}
+            >
               <span>{t("最近问题")}</span>
               <strong title={issueSummaryLabel}>{issueSummaryLabel}</strong>
               <small>{t("同步和更新状态")}</small>
@@ -674,7 +762,9 @@ export function SettingsPage({
               <div className="panel-heading settings-heading">
                 <div>
                   <h2>{t("本机 Agent 同步")}</h2>
-                  <p>{t("查看本机来源检测和导入状态，常用同步动作可直接执行。")}</p>
+                  <p>
+                    {t("查看本机来源检测和导入状态，常用同步动作可直接执行。")}
+                  </p>
                 </div>
               </div>
               <div className="detail-stat-list settings-overview-list">
@@ -685,7 +775,9 @@ export function SettingsPage({
                 <div>
                   <span>{t("可同步来源")}</span>
                   <strong>
-                    {isSourcesLoading ? t("读取中...") : formatInteger(supportedDetectedCount, numberLocale)}
+                    {isSourcesLoading
+                      ? t("读取中...")
+                      : formatInteger(supportedDetectedCount, numberLocale)}
                   </strong>
                 </div>
                 <div>
@@ -696,7 +788,9 @@ export function SettingsPage({
               <div className="form-actions settings-overview-actions">
                 <button
                   className="primary secondary"
-                  disabled={isDetecting || isImporting || isSyncing || isSourcesLoading}
+                  disabled={
+                    isDetecting || isImporting || isSyncing || isSourcesLoading
+                  }
                   onClick={() => void handleDetect()}
                   type="button"
                 >
@@ -727,11 +821,18 @@ export function SettingsPage({
               </div>
             </section>
 
-            <section className="panel sync-settings-card" aria-busy={isSyncSettingsLoading}>
+            <section
+              className="panel sync-settings-card"
+              aria-busy={isSyncSettingsLoading}
+            >
               <div className="panel-heading settings-heading">
                 <div>
                   <h2>{t("后台自动同步")}</h2>
-                  <p>{t("按固定间隔自动同步本机 Agent 来源，也可以手动触发一次后台同步。")}</p>
+                  <p>
+                    {t(
+                      "按固定间隔自动同步本机 Agent 来源，也可以手动触发一次后台同步。",
+                    )}
+                  </p>
                 </div>
                 <button
                   className="primary secondary"
@@ -750,7 +851,9 @@ export function SettingsPage({
                     <input
                       checked={syncDraft.enabled}
                       disabled={syncControlsDisabled}
-                      onChange={(event) => updateSyncDraft("enabled", event.target.checked)}
+                      onChange={(event) =>
+                        updateSyncDraft("enabled", event.target.checked)
+                      }
                       role="switch"
                       type="checkbox"
                     />
@@ -762,7 +865,10 @@ export function SettingsPage({
                       disabled={syncControlsDisabled}
                       value={syncDraft.interval_minutes}
                       onChange={(event) =>
-                        updateSyncDraft("interval_minutes", Number(event.target.value))
+                        updateSyncDraft(
+                          "interval_minutes",
+                          Number(event.target.value),
+                        )
                       }
                     >
                       {SYNC_INTERVAL_VALUES.map((value) => (
@@ -777,7 +883,9 @@ export function SettingsPage({
                     <input
                       checked={syncDraft.sync_on_startup}
                       disabled={syncControlsDisabled}
-                      onChange={(event) => updateSyncDraft("sync_on_startup", event.target.checked)}
+                      onChange={(event) =>
+                        updateSyncDraft("sync_on_startup", event.target.checked)
+                      }
                       type="checkbox"
                     />
                     <span>{t("启动后立即同步")}</span>
@@ -795,7 +903,10 @@ export function SettingsPage({
                   </div>
                   <div className="sync-result-panel sync-status-message">
                     <span>{t("最近结果")}</span>
-                    <strong className="sync-result-text" title={lastResultLabel}>
+                    <strong
+                      className="sync-result-text"
+                      title={lastResultLabel}
+                    >
                       {lastResultLabel}
                     </strong>
                   </div>
@@ -827,7 +938,11 @@ export function SettingsPage({
               <div className="panel-heading settings-heading">
                 <div>
                   <h2>{t("多设备同步")}</h2>
-                  <p>{t("GitHub 加密同步和设备数据包都归入多设备管理，避免配置散落。")}</p>
+                  <p>
+                    {t(
+                      "GitHub 加密同步和设备数据包都归入多设备管理，避免配置散落。",
+                    )}
+                  </p>
                 </div>
               </div>
               <div className="detail-stat-list settings-overview-list">
@@ -837,7 +952,9 @@ export function SettingsPage({
                 </div>
                 <div>
                   <span>{t("操作状态")}</span>
-                  <strong>{isAppUpdateBusy ? t("更新处理中") : t("可配置")}</strong>
+                  <strong>
+                    {isAppUpdateBusy ? t("更新处理中") : t("可配置")}
+                  </strong>
                 </div>
                 <div>
                   <span>{t("设备数据包")}</span>
@@ -888,7 +1005,11 @@ export function SettingsPage({
               type="button"
             >
               <strong>{t("高级")}</strong>
-              <span>{t("演示数据、全量刷新和导出。")}</span>
+              <span>
+                {isDemoDataEnabled
+                  ? t("演示数据、全量刷新和导出。")
+                  : t("全量刷新和导出。")}
+              </span>
             </button>
           </div>
         </section>
@@ -931,12 +1052,17 @@ export function SettingsPage({
           <div className="settings-section-heading">
             <div>
               <h2>{t("多设备")}</h2>
-              <p>{t("配置 GitHub 加密同步，或导入其他设备导出的本地数据包。")}</p>
+              <p>
+                {t("配置 GitHub 加密同步，或导入其他设备导出的本地数据包。")}
+              </p>
             </div>
           </div>
 
           <div className="sync-layout-grid">
-            <GitHubSyncPanel onNotice={setNotice} isAppUpdateBusy={isAppUpdateBusy} />
+            <GitHubSyncPanel
+              onNotice={setNotice}
+              isAppUpdateBusy={isAppUpdateBusy}
+            />
             <DeviceDatasetsPanel onNotice={setNotice} />
           </div>
         </section>
@@ -963,7 +1089,10 @@ export function SettingsPage({
                   <h2>{t("数字显示")}</h2>
                   <p>{t("控制 Token 数值在概览、图表和排行中的展示方式。")}</p>
                 </div>
-                <div className="segmented display-mode-segmented" aria-label={t("数字显示")}>
+                <div
+                  className="segmented display-mode-segmented"
+                  aria-label={t("数字显示")}
+                >
                   <button
                     className={numberDisplayMode === "compact" ? "active" : ""}
                     onClick={() => handleNumberDisplayModeChange("compact")}
@@ -986,20 +1115,28 @@ export function SettingsPage({
               <div className="panel-heading settings-heading">
                 <div>
                   <h2>{t("常驻小窗")}</h2>
-                  <p>{t("控制常驻小窗是否展示 Codex 剩余用量；默认关闭，避免占用小窗空间。")}</p>
+                  <p>
+                    {t(
+                      "控制常驻小窗是否展示 Codex 剩余用量；默认关闭，避免占用小窗空间。",
+                    )}
+                  </p>
                 </div>
                 <label className="switch-field">
                   <span>{t("显示 Codex 剩余用量")}</span>
                   <input
                     checked={showCodexUsageLimits}
-                    onChange={(event) => setShowCodexUsageLimits(event.target.checked)}
+                    onChange={(event) =>
+                      setShowCodexUsageLimits(event.target.checked)
+                    }
                     role="switch"
                     type="checkbox"
                   />
                 </label>
               </div>
               <p className="settings-card-note">
-                {t("默认关闭。开启后常驻小窗会增加 Codex 5 小时和 1 周剩余额度；关闭时布局自动收缩。")}
+                {t(
+                  "默认关闭。开启后常驻小窗会增加 Codex 5 小时和 1 周剩余额度；关闭时布局自动收缩。",
+                )}
               </p>
             </section>
 
@@ -1007,13 +1144,17 @@ export function SettingsPage({
               <div className="panel-heading settings-heading">
                 <div>
                   <h2>{t("界面语言")}</h2>
-                  <p>{t("跟随系统语言，中文系统默认中文，其他语言默认英文。")}</p>
+                  <p>
+                    {t("跟随系统语言，中文系统默认中文，其他语言默认英文。")}
+                  </p>
                 </div>
                 <label className="language-select">
                   <span>{t("界面语言")}</span>
                   <select
                     value={language}
-                    onChange={(event) => handleLanguageChange(event.target.value as AppLanguage)}
+                    onChange={(event) =>
+                      handleLanguageChange(event.target.value as AppLanguage)
+                    }
                   >
                     <option value="zh-CN">{t("中文")}</option>
                     <option value="en-US">English</option>
@@ -1026,7 +1167,11 @@ export function SettingsPage({
               <div className="panel-heading settings-heading">
                 <div>
                   <h2>{t("应用更新")}</h2>
-                  <p>{t("通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。")}</p>
+                  <p>
+                    {t(
+                      "通过 GitHub Releases 检查签名更新包。下载并安装时，Windows 可能会自动关闭当前应用。",
+                    )}
+                  </p>
                 </div>
                 <button
                   className="primary secondary"
@@ -1045,7 +1190,9 @@ export function SettingsPage({
                 </div>
                 <div>
                   <span>{t("\u53d1\u5e03\u65f6\u95f4")}</span>
-                  <strong>{formatDateTime(updateInfo.date, t("\u65e0"))}</strong>
+                  <strong>
+                    {formatDateTime(updateInfo.date, t("\u65e0"))}
+                  </strong>
                 </div>
                 <div>
                   <span>{t("\u5f53\u524d\u7248\u672c")}</span>
@@ -1072,18 +1219,27 @@ export function SettingsPage({
                   <div className="update-progress-meta">
                     <span>{t("下载进度")}</span>
                     <strong>{updateProgressPercent}%</strong>
-                    <small className="update-progress-bytes">{updateProgressBytesLabel}</small>
+                    <small className="update-progress-bytes">
+                      {updateProgressBytesLabel}
+                    </small>
                   </div>
-                  <div className="update-progress-bar" aria-label={t("下载进度")}>
-                    <span style={{ width: `${updateProgressPercent}%` }} />
-                  </div>
+                  <progress
+                    className="update-progress-bar"
+                    aria-label={t("下载进度")}
+                    max={100}
+                    value={updateProgressPercent}
+                  />
                 </div>
               ) : null}
 
               <div className="form-actions">
                 <button
                   className="primary"
-                  disabled={!updateInfo?.available || isCheckingUpdate || isInstallingUpdate}
+                  disabled={
+                    !updateInfo?.available ||
+                    isCheckingUpdate ||
+                    isInstallingUpdate
+                  }
                   onClick={() => void handleInstallUpdate()}
                   type="button"
                 >
@@ -1112,17 +1268,23 @@ export function SettingsPage({
           <section className="panel settings-utility settings-action-strip">
             <div>
               <h2>{t("数据维护")}</h2>
-              <p>{t("全量刷新会跳过增量游标重新扫描本机来源；不会删除源端已不存在的历史记录。")}</p>
+              <p>
+                {t(
+                  "全量刷新会跳过增量游标重新扫描本机来源；不会删除源端已不存在的历史记录。",
+                )}
+              </p>
             </div>
             <div className="utility-actions">
-              <button
-                className="primary secondary"
-                disabled={isSeedLoading}
-                onClick={() => void handleSeed()}
-                type="button"
-              >
-                {isSeedLoading ? t("处理中...") : t("生成演示数据")}
-              </button>
+              {isDemoDataEnabled ? (
+                <button
+                  className="primary secondary"
+                  disabled={isSeedLoading}
+                  onClick={() => void handleSeed()}
+                  type="button"
+                >
+                  {isSeedLoading ? t("处理中...") : t("生成演示数据")}
+                </button>
+              ) : null}
               <button
                 className="primary secondary"
                 disabled={isImporting || isSyncing}
@@ -1145,7 +1307,11 @@ export function SettingsPage({
           <section className="panel settings-utility">
             <div>
               <h2>{t("统计数据范围")}</h2>
-              <p>{t("当前只读取本机已有记录和导入后的统计元数据，不保存 prompt、response 或 Authorization。")}</p>
+              <p>
+                {t(
+                  "当前只读取本机已有记录和导入后的统计元数据，不保存 prompt、response 或 Authorization。",
+                )}
+              </p>
             </div>
             <div className="detail-stat-list">
               <div>

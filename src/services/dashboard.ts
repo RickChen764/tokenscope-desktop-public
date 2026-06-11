@@ -1,7 +1,11 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
+import {
+  check,
+  type DownloadEvent,
+  type Update,
+} from "@tauri-apps/plugin-updater";
 import { translateRuntime as tr } from "../i18n";
 import {
   createAppUpdateInfo,
@@ -240,7 +244,9 @@ function nextBrowserSyncAt(settings: SyncSettings) {
     return new Date().toISOString();
   }
 
-  return new Date(lastSyncMs + settings.interval_minutes * 60_000).toISOString();
+  return new Date(
+    lastSyncMs + settings.interval_minutes * 60_000,
+  ).toISOString();
 }
 
 function normalizeSyncSettings(input: Partial<SyncSettings>): SyncSettings {
@@ -248,7 +254,8 @@ function normalizeSyncSettings(input: Partial<SyncSettings>): SyncSettings {
   const normalized: SyncSettings = {
     ...defaults,
     ...input,
-    enabled: typeof input.enabled === "boolean" ? input.enabled : defaults.enabled,
+    enabled:
+      typeof input.enabled === "boolean" ? input.enabled : defaults.enabled,
     interval_minutes: normalizeSyncInterval(input.interval_minutes),
     sync_on_startup:
       typeof input.sync_on_startup === "boolean"
@@ -285,7 +292,10 @@ function writeBrowserSyncSettings(settings: Partial<SyncSettings>) {
   });
 
   try {
-    window.localStorage.setItem(SYNC_SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+    window.localStorage.setItem(
+      SYNC_SETTINGS_STORAGE_KEY,
+      JSON.stringify(nextSettings),
+    );
   } catch {
     // Browser preview storage is best effort; desktop builds persist via SQLite.
   }
@@ -320,9 +330,15 @@ export function getStoredAppUpdateInfo() {
     ? storedInfo
     : recoverStoredAppUpdateInfo(storedInfo);
 
-  if (storedInfo.status !== recoveredInfo.status && typeof window !== "undefined") {
+  if (
+    storedInfo.status !== recoveredInfo.status &&
+    typeof window !== "undefined"
+  ) {
     try {
-      window.localStorage.setItem(APP_UPDATE_STATE_STORAGE_KEY, JSON.stringify(recoveredInfo));
+      window.localStorage.setItem(
+        APP_UPDATE_STATE_STORAGE_KEY,
+        JSON.stringify(recoveredInfo),
+      );
     } catch {
       // Update state only improves UX; the updater itself remains authoritative.
     }
@@ -340,12 +356,19 @@ function writeStoredAppUpdateInfo(info: Partial<AppUpdateInfo>) {
 
   if (typeof window !== "undefined") {
     try {
-      window.localStorage.setItem(APP_UPDATE_STATE_STORAGE_KEY, JSON.stringify(nextInfo));
+      window.localStorage.setItem(
+        APP_UPDATE_STATE_STORAGE_KEY,
+        JSON.stringify(nextInfo),
+      );
     } catch {
       // Update state only improves UX; the updater itself remains authoritative.
     }
 
-    window.dispatchEvent(new CustomEvent<AppUpdateInfo>(APP_UPDATE_INFO_EVENT, { detail: nextInfo }));
+    window.dispatchEvent(
+      new CustomEvent<AppUpdateInfo>(APP_UPDATE_INFO_EVENT, {
+        detail: nextInfo,
+      }),
+    );
   }
 
   return nextInfo;
@@ -353,6 +376,10 @@ function writeStoredAppUpdateInfo(info: Partial<AppUpdateInfo>) {
 
 function isDesktopRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+export function isDemoDataEnabled() {
+  return import.meta.env.DEV;
 }
 
 function requireDesktopRuntime(action: string) {
@@ -377,7 +404,9 @@ async function readCurrentAppVersion() {
   }
 }
 
-function normalizeCallFilters(overrides: Partial<LlmCallFilters> = {}): LlmCallFilters {
+function normalizeCallFilters(
+  overrides: Partial<LlmCallFilters> = {},
+): LlmCallFilters {
   return {
     from: overrides.from ?? null,
     to: overrides.to ?? null,
@@ -393,7 +422,11 @@ function normalizeCallFilters(overrides: Partial<LlmCallFilters> = {}): LlmCallF
   };
 }
 
-async function invokeOrFallback<T>(command: string, args: Record<string, unknown>, fallback: T) {
+async function invokeOrFallback<T>(
+  command: string,
+  args: Record<string, unknown>,
+  fallback: T,
+) {
   if (!isDesktopRuntime()) {
     return fallback;
   }
@@ -402,7 +435,11 @@ async function invokeOrFallback<T>(command: string, args: Record<string, unknown
 }
 
 export function getDashboardSummary(range: DashboardRange) {
-  return invokeOrFallback<DashboardSummary>("get_dashboard_summary", { range }, emptySummary);
+  return invokeOrFallback<DashboardSummary>(
+    "get_dashboard_summary",
+    { range },
+    emptySummary,
+  );
 }
 
 export function getDashboardSummaryForDates(from: string, to: string) {
@@ -471,7 +508,11 @@ export function hideTokenPulseWindow() {
 }
 
 export function getTokenPulsePositionLocked() {
-  return invokeOrFallback<boolean>("get_token_pulse_position_locked", {}, false);
+  return invokeOrFallback<boolean>(
+    "get_token_pulse_position_locked",
+    {},
+    false,
+  );
 }
 
 export function setTokenPulsePositionLocked(locked: boolean) {
@@ -509,27 +550,51 @@ export function getDimensionDailySeries(
 }
 
 export function getTopAgents(from: string, to: string, limit: number) {
-  return invokeOrFallback<TopDimensionRow[]>("get_top_agents", { from, to, limit }, []);
+  return invokeOrFallback<TopDimensionRow[]>(
+    "get_top_agents",
+    { from, to, limit },
+    [],
+  );
 }
 
 export function getTopModels(from: string, to: string, limit: number) {
-  return invokeOrFallback<TopDimensionRow[]>("get_top_models", { from, to, limit }, []);
+  return invokeOrFallback<TopDimensionRow[]>(
+    "get_top_models",
+    { from, to, limit },
+    [],
+  );
 }
 
 export function getTopProviders(from: string, to: string, limit: number) {
-  return invokeOrFallback<TopDimensionRow[]>("get_top_providers", { from, to, limit }, []);
+  return invokeOrFallback<TopDimensionRow[]>(
+    "get_top_providers",
+    { from, to, limit },
+    [],
+  );
 }
 
 export function getTopWorkflows(from: string, to: string, limit: number) {
-  return invokeOrFallback<TopDimensionRow[]>("get_top_workflows", { from, to, limit }, []);
+  return invokeOrFallback<TopDimensionRow[]>(
+    "get_top_workflows",
+    { from, to, limit },
+    [],
+  );
 }
 
 export function getTopProjects(from: string, to: string, limit: number) {
-  return invokeOrFallback<TopDimensionRow[]>("get_top_projects", { from, to, limit }, []);
+  return invokeOrFallback<TopDimensionRow[]>(
+    "get_top_projects",
+    { from, to, limit },
+    [],
+  );
 }
 
 export function getTopSessions(from: string, to: string, limit: number) {
-  return invokeOrFallback<TopDimensionRow[]>("get_top_sessions", { from, to, limit }, []);
+  return invokeOrFallback<TopDimensionRow[]>(
+    "get_top_sessions",
+    { from, to, limit },
+    [],
+  );
 }
 
 export function getRecentCalls(limit: number) {
@@ -537,7 +602,11 @@ export function getRecentCalls(limit: number) {
 }
 
 export function listLlmCalls(filters: LlmCallFilters) {
-  return invokeOrFallback<LlmCallPage>("list_llm_calls", { filters }, emptyCallPage);
+  return invokeOrFallback<LlmCallPage>(
+    "list_llm_calls",
+    { filters },
+    emptyCallPage,
+  );
 }
 
 export function getCallFilterOptions() {
@@ -564,7 +633,9 @@ export async function exportDeviceDatasetPackage(exportDir: string) {
 export async function importDeviceDatasetPackage(path: string) {
   requireDesktopRuntime("导入设备数据包");
 
-  return invoke<DevicePackageImportResult>("import_device_dataset_package", { path });
+  return invoke<DevicePackageImportResult>("import_device_dataset_package", {
+    path,
+  });
 }
 
 export async function openExportFolder(path?: string) {
@@ -600,13 +671,21 @@ export function listDataHealthIssues(filters?: Partial<LlmCallFilters>) {
 }
 
 export function listCustomImporterProfiles() {
-  return invokeOrFallback<CustomImporterProfile[]>("list_custom_importer_profiles", {}, []);
+  return invokeOrFallback<CustomImporterProfile[]>(
+    "list_custom_importer_profiles",
+    {},
+    [],
+  );
 }
 
-export async function upsertCustomImporterProfile(input: CustomImporterProfileInput) {
+export async function upsertCustomImporterProfile(
+  input: CustomImporterProfileInput,
+) {
   requireDesktopRuntime("保存自定义数据源");
 
-  return invoke<CustomImporterProfile>("upsert_custom_importer_profile", { input });
+  return invoke<CustomImporterProfile>("upsert_custom_importer_profile", {
+    input,
+  });
 }
 
 export async function deleteCustomImporterProfile(id: string) {
@@ -628,7 +707,11 @@ export async function runCustomImporter(id: string) {
 }
 
 export function getSyncSettings() {
-  return invokeOrFallback<SyncSettings>("get_sync_settings", {}, readBrowserSyncSettings());
+  return invokeOrFallback<SyncSettings>(
+    "get_sync_settings",
+    {},
+    readBrowserSyncSettings(),
+  );
 }
 
 export async function saveSyncSettings(settings: SyncSettingsInput) {
@@ -690,7 +773,9 @@ export function listGitHubSyncRemoteDevices() {
   );
 }
 
-export async function saveGitHubSyncSettings(settings: GitHubSyncSettingsInput) {
+export async function saveGitHubSyncSettings(
+  settings: GitHubSyncSettingsInput,
+) {
   if (!isDesktopRuntime()) {
     return {
       ...defaultGitHubSyncSettings(),
@@ -701,7 +786,9 @@ export async function saveGitHubSyncSettings(settings: GitHubSyncSettingsInput) 
     };
   }
 
-  return invoke<GitHubSyncSettings>("save_github_sync_settings", { input: settings });
+  return invoke<GitHubSyncSettings>("save_github_sync_settings", {
+    input: settings,
+  });
 }
 
 export function testGitHubSyncConnection() {
@@ -782,9 +869,14 @@ async function runAppUpdateCheck() {
 
   const currentVersionPromise = readCurrentAppVersion();
   try {
-    const [nextUpdate, currentVersion] = await Promise.all([check(), currentVersionPromise]);
+    const [nextUpdate, currentVersion] = await Promise.all([
+      check(),
+      currentVersionPromise,
+    ]);
     pendingAppUpdate = nextUpdate;
-    return writeStoredAppUpdateInfo(createAppUpdateInfo(pendingAppUpdate, currentVersion));
+    return writeStoredAppUpdateInfo(
+      createAppUpdateInfo(pendingAppUpdate, currentVersion),
+    );
   } catch (err) {
     pendingAppUpdate = null;
     const currentVersion = await currentVersionPromise;
@@ -886,7 +978,11 @@ export async function installPendingAppUpdate(
 }
 
 export function detectLocalAgents() {
-  return invokeOrFallback<LocalAgentStatus[]>("detect_local_agents", {}, browserAgentFallback());
+  return invokeOrFallback<LocalAgentStatus[]>(
+    "detect_local_agents",
+    {},
+    browserAgentFallback(),
+  );
 }
 
 export function listAgentSources() {
@@ -898,6 +994,10 @@ export function listAgentSources() {
 }
 
 export async function seedDemoData() {
+  if (!isDemoDataEnabled()) {
+    throw new Error(tr("演示数据只在开发模式可用。"));
+  }
+
   requireDesktopRuntime("生成演示数据");
 
   await invoke("seed_demo_data");
@@ -915,13 +1015,19 @@ export async function importCodexThreads() {
   return invoke<CodexImportResult>("import_codex_threads");
 }
 
-export async function getCodexUsageLimits() {
+export async function getCodexUsageLimits(
+  options: { forceRefresh?: boolean } = {},
+) {
   requireDesktopRuntime("读取 Codex 剩余用量");
 
-  return invoke<CodexUsageLimitSnapshot | null>("get_codex_usage_limits");
+  return invoke<CodexUsageLimitSnapshot | null>("get_codex_usage_limits", {
+    forceRefresh: options.forceRefresh ?? false,
+  });
 }
 
-export async function importDetectedAgents(mode = "incremental" as AgentImportMode) {
+export async function importDetectedAgents(
+  mode = "incremental" as AgentImportMode,
+) {
   requireDesktopRuntime("导入本机 Agent 数据");
 
   return invoke<AgentImportResult[]>("import_detected_agents", { mode });

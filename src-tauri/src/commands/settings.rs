@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
+use crate::commands::validation::validate_call_filters_date_range;
 use crate::db::{
     DevicePackageImportResult, ExternalDataset, GitHubSyncConnectionTestResult,
     GitHubSyncRemoteDevice, GitHubSyncRunResult, GitHubSyncSettings, GitHubSyncSettingsInput,
@@ -30,6 +31,7 @@ pub async fn export_calls_csv(
         limit: 100,
         offset: 0,
     });
+    validate_call_filters_date_range(&filters)?;
     let csv = state
         .repository
         .export_llm_calls_csv(&filters)

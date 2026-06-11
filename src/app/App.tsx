@@ -7,7 +7,10 @@ import { MiniSeriesChart } from "../components/MiniSeriesChart";
 import { ReportsPage } from "../components/ReportsPage";
 import { SettingsPage } from "../components/SettingsPage";
 import { SummaryCards } from "../components/SummaryCards";
-import { TokenPulseDetailWindow, TokenPulseWindow } from "../components/TokenPulseWindow";
+import {
+  TokenPulseDetailWindow,
+  TokenPulseWindow,
+} from "../components/TokenPulseWindow";
 import { TopList } from "../components/TopList";
 import { ToastNotice, type ToastNoticeValue } from "../components/ToastNotice";
 import { useI18n } from "../i18n";
@@ -26,6 +29,7 @@ import {
   getTopWorkflows,
   importDetectedAgents,
   installPendingAppUpdate,
+  isDemoDataEnabled,
   listAgentSources,
   seedDemoData,
 } from "../services/dashboard";
@@ -81,8 +85,10 @@ function getInitialAppUpdateInfo() {
   const storedInfo = getStoredAppUpdateInfo();
 
   if (
+    import.meta.env.DEV &&
     typeof window !== "undefined" &&
-    (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost")
+    (window.location.hostname === "127.0.0.1" ||
+      window.location.hostname === "localhost")
   ) {
     const params = new URLSearchParams(window.location.search);
     if (params.get("mockUpdate") === "1") {
@@ -93,8 +99,7 @@ function getInitialAppUpdateInfo() {
         current_version: storedInfo.current_version ?? "0.1.4",
         version: params.get("mockUpdateVersion") ?? "0.1.5",
         date: now,
-        body:
-          "模拟更新：左侧栏会显示升级入口，悬浮后展示版本、发布时间和这段说明。此数据仅用于预览 UI，不会触发真实下载。",
+        body: "模拟更新：左侧栏会显示升级入口，悬浮后展示版本、发布时间和这段说明。此数据仅用于预览 UI，不会触发真实下载。",
         status: "available" as const,
         checked_at: now,
         error: null,
@@ -137,17 +142,23 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSourceStatusLoading, setIsSourceStatusLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo>(() => getInitialAppUpdateInfo());
+  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo>(() =>
+    getInitialAppUpdateInfo(),
+  );
   const [isInstallingAppUpdate, setIsInstallingAppUpdate] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [notice, setNotice] = useState<ToastNoticeValue | null>(null);
 
   const dateWindow = useMemo(
-    () => (range === "custom" ? { from: customFrom, to: customTo } : getLocalDateWindow(range)),
+    () =>
+      range === "custom"
+        ? { from: customFrom, to: customTo }
+        : getLocalDateWindow(range),
     [customFrom, customTo, range],
   );
   const isDateWindowValid =
-    Boolean(dateWindow.from && dateWindow.to) && dateWindow.from <= dateWindow.to;
+    Boolean(dateWindow.from && dateWindow.to) &&
+    dateWindow.from <= dateWindow.to;
 
   const loadDashboard = useCallback(
     async (options?: { clearNotice?: boolean }) => {
@@ -238,7 +249,8 @@ export function App() {
     }
 
     window.addEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
-    return () => window.removeEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
+    return () =>
+      window.removeEventListener(APP_UPDATE_INFO_EVENT, handleAppUpdateInfo);
   }, []);
 
   useEffect(() => {
@@ -280,7 +292,11 @@ export function App() {
   async function handleInstallAppUpdate() {
     setIsInstallingAppUpdate(true);
     setNotice(null);
-    setAppUpdateInfo((current) => ({ ...current, status: "downloading", error: null }));
+    setAppUpdateInfo((current) => ({
+      ...current,
+      status: "downloading",
+      error: null,
+    }));
 
     try {
       await installPendingAppUpdate((progress) => {
@@ -292,10 +308,16 @@ export function App() {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setAppUpdateInfo((current) => ({ ...current, status: "error", error: message }));
+      setAppUpdateInfo((current) => ({
+        ...current,
+        status: "error",
+        error: message,
+      }));
       setNotice({
         kind: "error",
-        message: t("\u5b89\u88c5\u66f4\u65b0\u5931\u8d25\uff1a{error}", { error: message }),
+        message: t("\u5b89\u88c5\u66f4\u65b0\u5931\u8d25\uff1a{error}", {
+          error: message,
+        }),
       });
       setIsInstallingAppUpdate(false);
     }
@@ -307,8 +329,14 @@ export function App() {
     try {
       const results = await importDetectedAgents("incremental");
       const clearedDemoRows = await clearDemoData();
-      const imported = results.reduce((total, result) => total + result.imported, 0);
-      const skipped = results.reduce((total, result) => total + result.skipped, 0);
+      const imported = results.reduce(
+        (total, result) => total + result.imported,
+        0,
+      );
+      const skipped = results.reduce(
+        (total, result) => total + result.skipped,
+        0,
+      );
       const refreshed = await loadDashboard({ clearNotice: false });
       await loadAgentSourceStatus();
       setSyncVersion((value) => value + 1);
@@ -321,11 +349,14 @@ export function App() {
             : "";
         setNotice({
           kind: "success",
-          message: t("本机数据已同步：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。", {
-            cleanupText,
-            imported,
-            skipped,
-          }),
+          message: t(
+            "本机数据已同步：写入 {imported} 条，跳过 {skipped} 条{cleanupText}。",
+            {
+              cleanupText,
+              imported,
+              skipped,
+            },
+          ),
         });
       }
     } catch (err) {
@@ -347,7 +378,10 @@ export function App() {
       await seedDemoData();
       const refreshed = await loadDashboard({ clearNotice: false });
       if (refreshed) {
-        setNotice({ kind: "success", message: t("演示数据已生成，仪表盘已刷新。") });
+        setNotice({
+          kind: "success",
+          message: t("演示数据已生成，仪表盘已刷新。"),
+        });
       }
     } catch (err) {
       setNotice({
@@ -406,8 +440,13 @@ export function App() {
   const showRangeSelector = view === "overview";
   const activeTitle =
     view === "dimensions" && dimensionDetail ? t("维度详情") : viewTitles[view];
-  const latestImportedAt = latestDateTime(agentSources.map((source) => source.last_imported_at));
-  const localImportedRows = agentSources.reduce((total, source) => total + source.imported_calls, 0);
+  const latestImportedAt = latestDateTime(
+    agentSources.map((source) => source.last_imported_at),
+  );
+  const localImportedRows = agentSources.reduce(
+    (total, source) => total + source.imported_calls,
+    0,
+  );
   const hasSyncedData = localImportedRows > 0 || Boolean(latestImportedAt);
   const syncStatusLabel = isSourceStatusLoading
     ? t("读取中...")
@@ -422,7 +461,9 @@ export function App() {
     : formatInteger(localImportedRows, numberLocale);
   const shouldShowUpdateRail =
     appUpdateInfo.available &&
-    ["available", "downloading", "installing", "error"].includes(appUpdateInfo.status);
+    ["available", "downloading", "installing", "error"].includes(
+      appUpdateInfo.status,
+    );
   const appUpdateStatusLabel =
     appUpdateInfo.status === "downloading"
       ? t("下载中...")
@@ -432,7 +473,8 @@ export function App() {
           ? t("检查失败")
           : t("可更新");
   const appUpdateActionLabel =
-    appUpdateInfo.status === "downloading" || appUpdateInfo.status === "installing"
+    appUpdateInfo.status === "downloading" ||
+    appUpdateInfo.status === "installing"
       ? t("处理中...")
       : t("升级");
   const appUpdateBodyLabel =
@@ -441,7 +483,10 @@ export function App() {
     t("发现新版本，可以下载并安装。");
   const appUpdateDateLabel = formatDateTime(appUpdateInfo.date, t("无"));
   const appUpdateVersionLabel =
-    appUpdateVersionRange(appUpdateInfo.current_version, appUpdateInfo.version) ?? t("可更新");
+    appUpdateVersionRange(
+      appUpdateInfo.current_version,
+      appUpdateInfo.version,
+    ) ?? t("可更新");
 
   return (
     <main className="app-frame">
@@ -480,7 +525,11 @@ export function App() {
               <span>{appUpdateStatusLabel}</span>
               <strong>{appUpdateActionLabel}</strong>
             </button>
-            <div className="update-status-popover" id="update-status-popover" role="status">
+            <div
+              className="update-status-popover"
+              id="update-status-popover"
+              role="status"
+            >
               <div>
                 <span>{t("可用版本")}</span>
                 <strong>{appUpdateVersionLabel}</strong>
@@ -506,7 +555,11 @@ export function App() {
             <span>{syncStatusLabel}</span>
             <strong>{localRowsLabel}</strong>
           </div>
-          <div className="rail-status-popover" id="sync-status-popover" role="status">
+          <div
+            className="rail-status-popover"
+            id="sync-status-popover"
+            role="status"
+          >
             <div>
               <span>{t("同步状态")}</span>
               <strong>
@@ -544,22 +597,34 @@ export function App() {
             </button>
             {showRangeSelector ? (
               <div className="range-control-group">
-                <div className="segmented range-segmented" aria-label={t("日期范围")}>
-                  {(["today", "7d", "30d", "90d", "custom"] as DashboardRangeMode[]).map(
-                    (option) => (
-                      <button
-                        className={option === range ? "active" : ""}
-                        key={option}
-                        onClick={() => setRange(option)}
-                        type="button"
-                      >
-                        {rangeModeLabels[option]}
-                      </button>
-                    ),
-                  )}
+                <div
+                  className="segmented range-segmented"
+                  aria-label={t("日期范围")}
+                >
+                  {(
+                    [
+                      "today",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "custom",
+                    ] as DashboardRangeMode[]
+                  ).map((option) => (
+                    <button
+                      className={option === range ? "active" : ""}
+                      key={option}
+                      onClick={() => setRange(option)}
+                      type="button"
+                    >
+                      {rangeModeLabels[option]}
+                    </button>
+                  ))}
                 </div>
                 {range === "custom" ? (
-                  <div className="date-range-picker" aria-label={t("自定义日期范围")}>
+                  <div
+                    className="date-range-picker"
+                    aria-label={t("自定义日期范围")}
+                  >
                     <label>
                       <span>{t("开始")}</span>
                       <input
@@ -594,7 +659,11 @@ export function App() {
             <SummaryCards isLoading={isLoading} summary={summary} />
 
             <section className="overview-focus" aria-label={t("每日用量趋势")}>
-              <MiniSeriesChart agentPoints={agentSeries} isLoading={isLoading} points={series} />
+              <MiniSeriesChart
+                agentPoints={agentSeries}
+                isLoading={isLoading}
+                points={series}
+              />
             </section>
 
             <section className="overview-secondary" aria-label={t("排行分析")}>
@@ -693,6 +762,7 @@ export function App() {
 
         {view === "settings" ? (
           <SettingsPage
+            isDemoDataEnabled={isDemoDataEnabled()}
             isSeedLoading={isLoading}
             isSyncing={isSyncing}
             onSeedDemoData={handleSeed}
@@ -704,11 +774,16 @@ export function App() {
 }
 
 function latestDateTime(values: Array<string | null>) {
-  const sortedValues = values.filter((value): value is string => Boolean(value)).sort();
+  const sortedValues = values
+    .filter((value): value is string => Boolean(value))
+    .sort();
   return sortedValues.length > 0 ? sortedValues[sortedValues.length - 1] : null;
 }
 
-function formatRelativeDateTime(value: string | null, t: (message: string, params?: Record<string, string | number>) => string) {
+function formatRelativeDateTime(
+  value: string | null,
+  t: (message: string, params?: Record<string, string | number>) => string,
+) {
   if (!value) {
     return t("尚未同步");
   }

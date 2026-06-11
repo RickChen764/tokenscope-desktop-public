@@ -47,7 +47,7 @@ pub async fn run_once(
     let total_started = Instant::now();
     let now = Local::now().to_rfc3339();
     let Some(_guard) = runtime.try_start() else {
-        eprintln!("[tokenscope][perf] background_sync.total elapsed_ms=0 status=busy");
+        crate::perf_log!("[tokenscope][perf] background_sync.total elapsed_ms=0 status=busy");
         return Ok(SyncRunResult {
             status: "busy".to_string(),
             message: "已有同步任务正在执行。".to_string(),
@@ -64,7 +64,7 @@ pub async fn run_once(
     let imported = results.iter().map(|result| result.imported).sum();
     let skipped = results.iter().map(|result| result.skipped).sum();
     let failed = has_failed_import(&results);
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] background_sync.import_agents elapsed_ms={} imported={} skipped={} failed={}",
         import_started.elapsed().as_millis(),
         imported,
@@ -95,7 +95,7 @@ pub async fn run_once(
         )
         .await
         .map_err(|err| err.to_string());
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] background_sync.record_sync_run elapsed_ms={} status={}",
         record_started.elapsed().as_millis(),
         if record_result.is_ok() { "ok" } else { "error" }
@@ -106,18 +106,18 @@ pub async fn run_once(
             github_sync::engine::run_once_with_runtime(repository, github_sync_runtime, false)
                 .await;
         match &github_result {
-            Ok(result) => eprintln!(
+            Ok(result) => crate::perf_log!(
                 "[tokenscope][perf] background_sync.github_sync elapsed_ms={} status={}",
                 github_started.elapsed().as_millis(),
                 result.status
             ),
-            Err(_) => eprintln!(
+            Err(_) => crate::perf_log!(
                 "[tokenscope][perf] background_sync.github_sync elapsed_ms={} status=error",
                 github_started.elapsed().as_millis()
             ),
         }
     }
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] background_sync.total elapsed_ms={} status={} imported={} skipped={}",
         total_started.elapsed().as_millis(),
         if record_result.is_ok() {

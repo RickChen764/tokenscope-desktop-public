@@ -7,6 +7,7 @@ mod importers;
 pub mod pricing;
 mod proxy;
 mod security;
+mod telemetry;
 mod tray_status;
 pub mod usage;
 

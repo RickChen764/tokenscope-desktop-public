@@ -5,6 +5,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::background_sync;
+use crate::commands::validation::{validate_call_filters_date_range, validate_date_range};
 use crate::db::{
     AgentSourceStats, CallFilterOptions, CustomImporterPreview, CustomImporterProfile,
     CustomImporterProfileInput, CustomImporterRunResult, DailyUsagePoint, DashboardSummary,
@@ -13,7 +14,7 @@ use crate::db::{
 };
 use crate::github_sync;
 use crate::importers::codex::{
-    get_default_codex_usage_limits, import_default_codex_threads, CodexImportResult,
+    get_default_codex_usage_limits_with_options, import_default_codex_threads, CodexImportResult,
     CodexUsageLimitSnapshot,
 };
 use crate::importers::custom_sqlite::{
@@ -93,6 +94,7 @@ pub async fn get_daily_usage_series(
     to: String,
     group_by: Option<String>,
 ) -> Result<Vec<DailyUsagePoint>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .daily_usage_series(&from, &to, group_by.as_deref())
@@ -107,25 +109,13 @@ pub async fn get_token_pulse(
     let history_days = history_days.unwrap_or(30);
     let started = Instant::now();
     let result = state.repository.token_pulse_snapshot(history_days).await;
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] command.get_token_pulse elapsed_ms={} history_days={} status={}",
         started.elapsed().as_millis(),
         history_days,
         if result.is_ok() { "ok" } else { "error" }
     );
     result
-}
-
-fn validate_date_range(from: &str, to: &str) -> Result<(), String> {
-    let from_date = NaiveDate::parse_from_str(from, "%Y-%m-%d")
-        .map_err(|_| format!("invalid from date: {from}"))?;
-    let to_date =
-        NaiveDate::parse_from_str(to, "%Y-%m-%d").map_err(|_| format!("invalid to date: {to}"))?;
-    if from_date > to_date {
-        return Err("from date must be before or equal to to date".to_string());
-    }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -136,6 +126,7 @@ pub async fn get_dimension_summary(
     dimension: String,
     value: String,
 ) -> Result<DashboardSummary, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .dimension_summary(&from, &to, &dimension, &value)
@@ -150,6 +141,7 @@ pub async fn get_dimension_daily_series(
     dimension: String,
     value: String,
 ) -> Result<Vec<DailyUsagePoint>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .dimension_daily_series(&from, &to, &dimension, &value)
@@ -163,6 +155,7 @@ pub async fn get_top_agents(
     to: String,
     limit: i64,
 ) -> Result<Vec<TopDimensionRow>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .top_agents(&from, &to, normalize_limit(limit))
@@ -177,6 +170,7 @@ pub async fn get_top_models(
     to: String,
     limit: i64,
 ) -> Result<Vec<TopDimensionRow>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .top_models(&from, &to, normalize_limit(limit))
@@ -191,6 +185,7 @@ pub async fn get_top_providers(
     to: String,
     limit: i64,
 ) -> Result<Vec<TopDimensionRow>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .top_providers(&from, &to, normalize_limit(limit))
@@ -205,6 +200,7 @@ pub async fn get_top_workflows(
     to: String,
     limit: i64,
 ) -> Result<Vec<TopDimensionRow>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .top_workflows(&from, &to, normalize_limit(limit))
@@ -219,6 +215,7 @@ pub async fn get_top_projects(
     to: String,
     limit: i64,
 ) -> Result<Vec<TopDimensionRow>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .top_projects(&from, &to, normalize_limit(limit))
@@ -233,6 +230,7 @@ pub async fn get_top_sessions(
     to: String,
     limit: i64,
 ) -> Result<Vec<TopDimensionRow>, String> {
+    validate_date_range(&from, &to)?;
     state
         .repository
         .top_sessions(&from, &to, normalize_limit(limit))
@@ -257,6 +255,7 @@ pub async fn list_llm_calls(
     state: State<'_, AppState>,
     filters: LlmCallFilters,
 ) -> Result<LlmCallPage, String> {
+    validate_call_filters_date_range(&filters)?;
     state
         .repository
         .list_llm_calls(&filters)
@@ -291,6 +290,7 @@ pub async fn list_data_health_issues(
     state: State<'_, AppState>,
     filters: LlmCallFilters,
 ) -> Result<Vec<DataHealthIssueRow>, String> {
+    validate_call_filters_date_range(&filters)?;
     state
         .repository
         .list_data_health_issues(&filters)
@@ -404,6 +404,10 @@ pub async fn list_agent_sources(
 
 #[tauri::command]
 pub async fn seed_demo_data(state: State<'_, AppState>) -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Err("演示数据只在开发模式可用。".to_string());
+    }
+
     state
         .repository
         .seed_demo_data()
@@ -426,15 +430,21 @@ pub async fn import_codex_threads(state: State<'_, AppState>) -> Result<CodexImp
 }
 
 #[tauri::command]
-pub async fn get_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
+pub async fn get_codex_usage_limits(
+    force_refresh: Option<bool>,
+) -> Result<Option<CodexUsageLimitSnapshot>, String> {
     let started = Instant::now();
-    let result = tauri::async_runtime::spawn_blocking(get_default_codex_usage_limits)
-        .await
-        .map_err(|err| err.to_string())
-        .and_then(|inner| inner);
-    eprintln!(
-        "[tokenscope][perf] command.get_codex_usage_limits elapsed_ms={} status={} found={}",
+    let force_refresh = force_refresh.unwrap_or(false);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        get_default_codex_usage_limits_with_options(force_refresh)
+    })
+    .await
+    .map_err(|err| err.to_string())
+    .and_then(|inner| inner);
+    crate::perf_log!(
+        "[tokenscope][perf] command.get_codex_usage_limits elapsed_ms={} force_refresh={} status={} found={}",
         started.elapsed().as_millis(),
+        force_refresh,
         if result.is_ok() { "ok" } else { "error" },
         matches!(&result, Ok(Some(_)))
     );
@@ -495,7 +505,7 @@ pub async fn run_background_sync_once(state: State<'_, AppState>) -> Result<Sync
     {
         Ok(result) => result,
         Err(err) => {
-            eprintln!(
+            crate::perf_log!(
                 "[tokenscope][perf] command.run_background_sync_once elapsed_ms={} sync_ms={} status=error",
                 started.elapsed().as_millis(),
                 sync_started.elapsed().as_millis()
@@ -515,7 +525,7 @@ pub async fn run_background_sync_once(state: State<'_, AppState>) -> Result<Sync
         settings.last_result = Some(result.message);
         settings.last_error = None;
     }
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] command.run_background_sync_once elapsed_ms={} sync_ms={} settings_ms={} status={}",
         started.elapsed().as_millis(),
         sync_ms,
@@ -553,7 +563,7 @@ pub async fn sync_today_token_pulse_data(
     let imported = results.iter().map(|result| result.imported).sum();
     let skipped = results.iter().map(|result| result.skipped).sum();
     let failed = results.iter().any(|result| result.status == "error");
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] command.sync_today_token_pulse_data.import elapsed_ms={} imported={} skipped={} failed={}",
         import_started.elapsed().as_millis(),
         imported,
@@ -583,7 +593,7 @@ pub async fn sync_today_token_pulse_data(
         .await
         {
             Ok(result) => {
-                eprintln!(
+                crate::perf_log!(
                     "[tokenscope][perf] command.sync_today_token_pulse_data.github elapsed_ms={} status={}",
                     github_started.elapsed().as_millis(),
                     result.status
@@ -594,7 +604,7 @@ pub async fn sync_today_token_pulse_data(
                 result.message
             }
             Err(err) => {
-                eprintln!(
+                crate::perf_log!(
                     "[tokenscope][perf] command.sync_today_token_pulse_data.github elapsed_ms={} status=error",
                     github_started.elapsed().as_millis()
                 );
@@ -604,7 +614,7 @@ pub async fn sync_today_token_pulse_data(
         }
     };
     let finished_at = Local::now().to_rfc3339();
-    eprintln!(
+    crate::perf_log!(
         "[tokenscope][perf] command.sync_today_token_pulse_data.total elapsed_ms={} status={} imported={} skipped={}",
         started.elapsed().as_millis(),
         status,

@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "token-pulse",
+  "description": "Resident token pulse window permissions",
+  "windows": ["token-pulse", "token-pulse-detail"],
+  "permissions": [
+    "core:window:allow-outer-position",
+    "core:window:allow-outer-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-start-dragging"
+  ]
+}

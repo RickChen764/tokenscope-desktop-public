@@ -3,9 +3,9 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration as StdDuration, Instant, SystemTime};
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -19,6 +19,7 @@ const CODEX_THREAD_SOURCE: &str = "codex_state_threads";
 const CODEX_ROLLOUT_SOURCE: &str = "codex_rollout_token_counts";
 const CODEX_GENERAL_LIMIT_ID: &str = "codex";
 const CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES: i64 = 15;
+const CODEX_USAGE_LIMIT_SCAN_CACHE_TTL: StdDuration = StdDuration::from_secs(45);
 
 static CODEX_USAGE_LIMIT_SCAN_CACHE: OnceLock<Mutex<CodexUsageLimitScanCache>> = OnceLock::new();
 
@@ -38,6 +39,9 @@ struct CodexUsageLimitScanCache {
 #[derive(Debug, Default)]
 struct CodexUsageLimitRootState {
     files: HashMap<PathBuf, CodexUsageLimitFileState>,
+    latest_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    latest_general_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    scanned_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,7 @@ struct CodexUsageLimitScanStats {
     bytes_read: u64,
     scanned_lines: u64,
     snapshots: u64,
+    cache_hits: u64,
 }
 
 #[derive(Debug)]
@@ -177,10 +182,12 @@ pub fn default_codex_archived_sessions_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".codex").join("archived_sessions"))
 }
 
-pub fn get_default_codex_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
+pub fn get_default_codex_usage_limits_with_options(
+    force_refresh: bool,
+) -> Result<Option<CodexUsageLimitSnapshot>, String> {
     let sessions_path = default_codex_sessions_path()?;
     let archived_sessions_path = default_codex_archived_sessions_path()?;
-    latest_codex_usage_limits_from_roots(&[sessions_path, archived_sessions_path])
+    latest_codex_usage_limits_from_roots(&[sessions_path, archived_sessions_path], force_refresh)
 }
 
 #[cfg(test)]
@@ -195,7 +202,17 @@ pub fn latest_codex_usage_limits_from_sessions_path(
 fn latest_codex_usage_limits_from_sessions_path_with_stats(
     sessions_path: &Path,
 ) -> Result<(Option<CodexUsageLimitSnapshot>, CodexUsageLimitScanStats), String> {
-    let read = read_codex_usage_limit_root(sessions_path)?;
+    let read = read_codex_usage_limit_root(sessions_path, false)?;
+    let snapshot =
+        select_codex_usage_limit_snapshot(read.latest_candidates, read.latest_general_candidates);
+    Ok((snapshot, read.stats))
+}
+
+#[cfg(test)]
+fn latest_codex_usage_limits_from_sessions_path_with_stats_force(
+    sessions_path: &Path,
+) -> Result<(Option<CodexUsageLimitSnapshot>, CodexUsageLimitScanStats), String> {
+    let read = read_codex_usage_limit_root(sessions_path, true)?;
     let snapshot =
         select_codex_usage_limit_snapshot(read.latest_candidates, read.latest_general_candidates);
     Ok((snapshot, read.stats))
@@ -203,12 +220,13 @@ fn latest_codex_usage_limits_from_sessions_path_with_stats(
 
 fn latest_codex_usage_limits_from_roots(
     roots: &[PathBuf],
+    force_refresh: bool,
 ) -> Result<Option<CodexUsageLimitSnapshot>, String> {
     let mut latest_candidates = Vec::new();
     let mut latest_general_candidates = Vec::new();
 
     for root in roots {
-        let read = read_codex_usage_limit_root(root)?;
+        let read = read_codex_usage_limit_root(root, force_refresh)?;
         latest_candidates.extend(read.latest_candidates);
         latest_general_candidates.extend(read.latest_general_candidates);
     }
@@ -219,10 +237,13 @@ fn latest_codex_usage_limits_from_roots(
     ))
 }
 
-fn read_codex_usage_limit_root(sessions_path: &Path) -> Result<CodexUsageLimitRootRead, String> {
+fn read_codex_usage_limit_root(
+    sessions_path: &Path,
+    force_refresh: bool,
+) -> Result<CodexUsageLimitRootRead, String> {
     let started = Instant::now();
     if !sessions_path.exists() {
-        eprintln!(
+        crate::perf_log!(
             "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files=0 bytes=0 lines=0 snapshots=0 found=false missing_path=true",
             started.elapsed().as_millis()
         );
@@ -234,16 +255,50 @@ fn read_codex_usage_limit_root(sessions_path: &Path) -> Result<CodexUsageLimitRo
         });
     }
 
-    let previous_files = {
+    let previous_state = {
         let cache = codex_usage_limit_scan_cache()
             .lock()
             .map_err(|err| err.to_string())?;
-        cache
-            .roots
-            .get(sessions_path)
-            .map(|root| root.files.clone())
-            .unwrap_or_default()
+        cache.roots.get(sessions_path).map(|root| {
+            (
+                root.files.clone(),
+                root.latest_candidates.clone(),
+                root.latest_general_candidates.clone(),
+                root.scanned_at,
+            )
+        })
     };
+    if !force_refresh {
+        if let Some((_, latest_candidates, latest_general_candidates, Some(scanned_at))) =
+            previous_state.as_ref()
+        {
+            if scanned_at.elapsed() <= CODEX_USAGE_LIMIT_SCAN_CACHE_TTL {
+                let result = select_codex_usage_limit_snapshot(
+                    latest_candidates.clone(),
+                    latest_general_candidates.clone(),
+                );
+                #[cfg(test)]
+                let stats = CodexUsageLimitScanStats {
+                    cache_hits: 1,
+                    ..CodexUsageLimitScanStats::default()
+                };
+                crate::perf_log!(
+                    "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files=0 read_files=0 reused_files=0 failed_files=0 bytes=0 bytes_read=0 lines=0 snapshots=0 cache_hits=1 found={}",
+                    started.elapsed().as_millis(),
+                    result.is_some()
+                );
+                return Ok(CodexUsageLimitRootRead {
+                    latest_candidates: latest_candidates.clone(),
+                    latest_general_candidates: latest_general_candidates.clone(),
+                    #[cfg(test)]
+                    stats,
+                });
+            }
+        }
+    }
+    let previous_files = previous_state
+        .map(|(files, _, _, _)| files)
+        .unwrap_or_default();
 
     let mut rollout_files = Vec::new();
     collect_rollout_jsonl_files(sessions_path, &mut rollout_files)?;
@@ -344,11 +399,16 @@ fn read_codex_usage_limit_root(sessions_path: &Path) -> Result<CodexUsageLimitRo
             .map_err(|err| err.to_string())?;
         cache.roots.insert(
             sessions_path.to_path_buf(),
-            CodexUsageLimitRootState { files: next_files },
+            CodexUsageLimitRootState {
+                files: next_files,
+                latest_candidates: latest_candidates.clone(),
+                latest_general_candidates: latest_general_candidates.clone(),
+                scanned_at: Some(Instant::now()),
+            },
         );
     }
-    eprintln!(
-        "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files={} read_files={} reused_files={} failed_files={} bytes={} bytes_read={} lines={} snapshots={} found={}",
+    crate::perf_log!(
+        "[tokenscope][perf] codex_usage_limits.scan elapsed_ms={} files={} read_files={} reused_files={} failed_files={} bytes={} bytes_read={} lines={} snapshots={} cache_hits={} found={}",
         started.elapsed().as_millis(),
         stats.files,
         stats.read_files,
@@ -358,6 +418,7 @@ fn read_codex_usage_limit_root(sessions_path: &Path) -> Result<CodexUsageLimitRo
         stats.bytes_read,
         stats.scanned_lines,
         stats.snapshots,
+        stats.cache_hits,
         result.is_some()
     );
 
@@ -399,7 +460,7 @@ fn read_codex_usage_limit_file(
         };
         let captured_at = captured_at.with_timezone(&Utc);
         snapshots += 1;
-        if snapshot.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID) {
+        if is_general_codex_usage_limit_snapshot(&snapshot) {
             merge_latest_snapshot(&mut latest_general, Some((captured_at, snapshot.clone())));
         }
         merge_latest_snapshot(&mut latest, Some((captured_at, snapshot)));
@@ -430,19 +491,14 @@ fn merge_latest_snapshot(
 }
 
 fn select_codex_usage_limit_snapshot(
-    latest_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
+    _latest_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
     latest_general_candidates: Vec<(DateTime<Utc>, CodexUsageLimitSnapshot)>,
 ) -> Option<CodexUsageLimitSnapshot> {
-    if let Some(general_snapshot) =
-        select_general_codex_usage_limit_snapshot(latest_general_candidates)
-    {
-        return Some(general_snapshot);
-    }
+    select_general_codex_usage_limit_snapshot(latest_general_candidates)
+}
 
-    latest_candidates
-        .into_iter()
-        .max_by_key(|(captured_at, _)| *captured_at)
-        .map(|(_, snapshot)| snapshot)
+fn is_general_codex_usage_limit_snapshot(snapshot: &CodexUsageLimitSnapshot) -> bool {
+    snapshot.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID)
 }
 
 fn select_general_codex_usage_limit_snapshot(
@@ -453,7 +509,7 @@ fn select_general_codex_usage_limit_snapshot(
         .max_by_key(|(captured_at, _)| *captured_at)
         .cloned()?;
 
-    let max_staleness = Duration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
+    let max_staleness = ChronoDuration::minutes(CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES);
     let fresh_candidates = latest_general_candidates
         .into_iter()
         .filter(|(captured_at, _)| {
@@ -920,7 +976,7 @@ fn read_rollout_token_counts(path: &Path) -> Vec<CodexRolloutTokenCount> {
             .ok()
             .map(|metadata| metadata.len())
             .unwrap_or(0);
-        eprintln!(
+        crate::perf_log!(
             "[tokenscope][perf] codex_rollout_token_counts.read elapsed_ms={} bytes={} token_counts={} path={}",
             elapsed_ms,
             bytes,
@@ -1296,6 +1352,7 @@ mod tests {
         import_codex_threads_from_path, import_codex_threads_from_path_with_scope,
         latest_codex_usage_limits_from_roots, latest_codex_usage_limits_from_sessions_path,
         latest_codex_usage_limits_from_sessions_path_with_stats,
+        latest_codex_usage_limits_from_sessions_path_with_stats_force,
         rollout_line_to_usage_limit_snapshot,
     };
 
@@ -1404,6 +1461,29 @@ mod tests {
     }
 
     #[test]
+    fn accepts_general_codex_usage_limit_for_any_plan_type() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &nested_path.join("team.jsonl"),
+            r#"{"timestamp":"2026-06-08T02:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"team","primary":{"resets_at":1780893660,"used_percent":30.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":9.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+
+        let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
+            .expect("session rollouts are scanned")
+            .expect("general subscription rate limit snapshot exists");
+
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshot.plan_type.as_deref(), Some("team"));
+        assert_eq!(snapshot.primary.remaining_percent, 70.0);
+        assert_eq!(snapshot.secondary.remaining_percent, 91.0);
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
+
+    #[test]
     fn merges_fresh_general_codex_snapshots_conservatively() {
         let sessions_path =
             std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
@@ -1449,10 +1529,13 @@ mod tests {
             r#"{"timestamp":"2026-06-10T03:01:53.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1781064028,"used_percent":19.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":43.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
         );
 
-        let snapshot = latest_codex_usage_limits_from_roots(&[
-            root_path.join("sessions"),
-            root_path.join("archived_sessions"),
-        ])
+        let snapshot = latest_codex_usage_limits_from_roots(
+            &[
+                root_path.join("sessions"),
+                root_path.join("archived_sessions"),
+            ],
+            false,
+        )
         .expect("session roots are scanned")
         .expect("rate limit snapshot exists");
 
@@ -1464,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_model_specific_codex_usage_limit_without_general_snapshot() {
+    fn ignores_model_specific_codex_usage_limit_without_subscription_snapshot() {
         let sessions_path =
             std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
         let nested_path = sessions_path.join("2026").join("06");
@@ -1475,13 +1558,9 @@ mod tests {
         );
 
         let snapshot = latest_codex_usage_limits_from_sessions_path(&sessions_path)
-            .expect("session rollouts are scanned")
-            .expect("model-specific rate limit snapshot is accepted");
+            .expect("session rollouts are scanned");
 
-        assert_eq!(snapshot.limit_id.as_deref(), Some("codex_bengalfox"));
-        assert_eq!(snapshot.limit_name.as_deref(), Some("GPT-5.3-Codex-Spark"));
-        assert_eq!(snapshot.primary.remaining_percent, 100.0);
-        assert!(snapshot.source_path.ends_with("spark.jsonl"));
+        assert!(snapshot.is_none());
 
         fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
     }
@@ -1499,7 +1578,7 @@ mod tests {
         );
 
         let (snapshot, first_stats) =
-            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+            latest_codex_usage_limits_from_sessions_path_with_stats_force(&sessions_path)
                 .expect("initial session rollouts are scanned");
         assert_eq!(
             snapshot
@@ -1513,7 +1592,7 @@ mod tests {
         assert_eq!(first_stats.scanned_lines, 1);
 
         let (_, second_stats) =
-            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+            latest_codex_usage_limits_from_sessions_path_with_stats_force(&sessions_path)
                 .expect("unchanged session rollouts are reused");
         assert_eq!(second_stats.read_files, 0);
         assert_eq!(second_stats.reused_files, 1);
@@ -1530,7 +1609,7 @@ mod tests {
         .expect("rollout fixture append succeeds");
 
         let (snapshot, third_stats) =
-            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+            latest_codex_usage_limits_from_sessions_path_with_stats_force(&sessions_path)
                 .expect("appended session rollout line is scanned");
         let snapshot = snapshot.expect("appended snapshot exists");
         assert_eq!(snapshot.captured_at, "2026-06-06T07:35:24.355Z");
@@ -1539,6 +1618,41 @@ mod tests {
         assert_eq!(third_stats.read_files, 1);
         assert_eq!(third_stats.reused_files, 0);
         assert_eq!(third_stats.scanned_lines, 1);
+
+        fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
+    }
+
+    #[test]
+    fn caches_recent_codex_usage_limit_scan_without_rewalking_files() {
+        let sessions_path =
+            std::env::temp_dir().join(format!("tokenscope-codex-sessions-{}", Uuid::new_v4()));
+        let nested_path = sessions_path.join("2026").join("06");
+        let rollout_path = nested_path.join("rollout.jsonl");
+        fs::create_dir_all(&nested_path).expect("session fixture directory created");
+        write_rollout(
+            &rollout_path,
+            r#"{"timestamp":"2026-06-06T07:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"pro","primary":{"resets_at":1780746000,"used_percent":10.0,"window_minutes":300},"secondary":{"resets_at":1781141316,"used_percent":20.0,"window_minutes":10080}},"info":{"last_token_usage":{"input_tokens":1000,"output_tokens":200,"total_tokens":1200}}}}"#,
+        );
+
+        let (_, first_stats) =
+            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+                .expect("initial session rollouts are scanned");
+        assert_eq!(first_stats.cache_hits, 0);
+        assert_eq!(first_stats.read_files, 1);
+
+        let (snapshot, second_stats) =
+            latest_codex_usage_limits_from_sessions_path_with_stats(&sessions_path)
+                .expect("recent session rollouts reuse cached root read");
+        assert_eq!(second_stats.cache_hits, 1);
+        assert_eq!(second_stats.files, 0);
+        assert_eq!(second_stats.read_files, 0);
+        assert_eq!(
+            snapshot
+                .expect("cached snapshot exists")
+                .primary
+                .remaining_percent,
+            90.0
+        );
 
         fs::remove_dir_all(sessions_path).expect("session fixture directory removed");
     }

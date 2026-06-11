@@ -9,6 +9,10 @@ function readProjectFile(path) {
   return readFileSync(join(root, path), "utf8");
 }
 
+function readProjectFiles(paths) {
+  return paths.map((path) => readProjectFile(path)).join("\n");
+}
+
 test("settings page stays focused on data statistics without proxy setup", () => {
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
   const appShell = readProjectFile("src/app/App.tsx");
@@ -28,7 +32,7 @@ test("settings page stays focused on data statistics without proxy setup", () =>
   assert.ok(settingsPage.includes("同步本机数据"));
   assert.ok(settingsPage.includes("全量刷新"));
   assert.ok(appShell.includes("clearDemoData"));
-  assert.ok(appShell.includes("importDetectedAgents(\"incremental\")"));
+  assert.ok(appShell.includes('importDetectedAgents("incremental")'));
   assert.ok(callsPage.includes("导出当前筛选 CSV"));
   assert.ok(appShell.includes("数据健康"));
   assert.ok(appShell.includes("报表导出"));
@@ -52,7 +56,7 @@ test("cost-related UI and pricing actions are sealed from active product surface
   const repository = readProjectFile("src-tauri/src/db/repository.rs");
 
   assert.equal(appShell.includes("CostRulesPage"), false);
-  assert.equal(appShell.includes("\"costs\""), false);
+  assert.equal(appShell.includes('"costs"'), false);
   assert.equal(summaryCards.includes("formatCost"), false);
   assert.equal(topList.includes("formatCost"), false);
   assert.equal(callsTable.includes("formatCost"), false);
@@ -73,18 +77,22 @@ test("cost-related UI and pricing actions are sealed from active product surface
     repository.indexOf("const CSV_HEADERS"),
     repository.indexOf("fn render_llm_calls_csv"),
   );
-  assert.equal(csvHeaders.includes("\"estimated_cost_usd\""), false);
-  assert.equal(csvHeaders.includes("\"cost_currency\""), false);
-  assert.equal(csvHeaders.includes("\"cost_source\""), false);
+  assert.equal(csvHeaders.includes('"estimated_cost_usd"'), false);
+  assert.equal(csvHeaders.includes('"cost_currency"'), false);
+  assert.equal(csvHeaders.includes('"cost_source"'), false);
 });
 
 test("settings page exposes local agent source sync status", () => {
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
-  const agentSourcesPanel = readProjectFile("src/components/AgentSourcesPanel.tsx");
+  const agentSourcesPanel = readProjectFile(
+    "src/components/AgentSourcesPanel.tsx",
+  );
   const styles = readProjectFile("src/styles.css");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const importerRegistry = readProjectFile("src-tauri/src/importers/mod.rs");
-  const claudeCodeImporter = readProjectFile("src-tauri/src/importers/claude_code.rs");
+  const claudeCodeImporter = readProjectFile(
+    "src-tauri/src/importers/claude_code.rs",
+  );
 
   assert.ok(settingsPage.includes("AgentSourcesPanel"));
   assert.ok(settingsPage.includes("listAgentSources"));
@@ -110,7 +118,9 @@ test("settings page exposes local agent source sync status", () => {
   assert.ok(agentSourcesPanel.includes("导入量"));
   assert.ok(agentSourcesPanel.includes("手动同步"));
   assert.ok(styles.includes(".source-stats"));
-  assert.ok(styles.includes("grid-template-columns: repeat(4, minmax(0, 1fr))"));
+  assert.ok(
+    styles.includes("grid-template-columns: repeat(4, minmax(0, 1fr))"),
+  );
   assert.ok(styles.includes("align-items: end"));
   assert.ok(styles.includes(".source-stat {"));
   assert.ok(styles.includes("justify-content: space-between"));
@@ -123,7 +133,9 @@ test("settings page exposes background auto sync settings without proxy setup", 
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const dashboardTypes = readProjectFile("src/types/dashboard.ts");
-  const dashboardCommands = readProjectFile("src-tauri/src/commands/dashboard.rs");
+  const dashboardCommands = readProjectFile(
+    "src-tauri/src/commands/dashboard.rs",
+  );
 
   assert.equal(/proxy/i.test(settingsPage), false);
   assert.ok(settingsPage.includes("后台自动同步"));
@@ -148,7 +160,7 @@ test("settings page exposes background auto sync settings without proxy setup", 
   assert.ok(dashboardService.includes("save_sync_settings"));
   assert.ok(dashboardService.includes("run_background_sync_once"));
   assert.ok(dashboardService.includes("AgentImportMode"));
-  assert.ok(dashboardService.includes("mode = \"incremental\""));
+  assert.ok(dashboardService.includes('mode = "incremental"'));
   assert.ok(dashboardService.includes("import_detected_agents"));
   assert.ok(dashboardService.includes("enabled: true"));
   assert.ok(dashboardService.includes("sync_on_startup: true"));
@@ -172,7 +184,11 @@ test("background sync settings auto-save and use a contained split layout", () =
   assert.ok(styles.includes(".sync-settings-card .form-actions"));
   assert.ok(styles.includes("display: none"));
   assert.ok(styles.includes(".sync-settings-layout"));
-  assert.ok(styles.includes("grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr)"));
+  assert.ok(
+    styles.includes(
+      "grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr)",
+    ),
+  );
   assert.ok(styles.includes(".sync-result-panel"));
   assert.ok(styles.includes(".sync-result-text"));
   assert.ok(styles.includes("overflow-wrap: anywhere"));
@@ -204,7 +220,9 @@ test("settings page is organized into clear grouped sections", () => {
   assert.ok(settingsPage.includes("settings-section data-sync-section"));
   assert.ok(settingsPage.includes("settings-section data-portability-section"));
   assert.ok(settingsPage.includes("settings-section app-preferences-section"));
-  assert.ok(settingsPage.includes("settings-section advanced-settings-section"));
+  assert.ok(
+    settingsPage.includes("settings-section advanced-settings-section"),
+  );
   assert.ok(settingsPage.includes("settings-section-heading"));
   assert.ok(settingsPage.includes("sync-layout-grid"));
   assert.ok(settingsPage.includes("settings-action-strip"));
@@ -213,8 +231,14 @@ test("settings page is organized into clear grouped sections", () => {
   assert.ok(settingsPage.includes("title={lastErrorLabel}"));
   assert.ok(settingsPage.includes("settings-two-column"));
   assert.ok(settingsPage.includes("settings-app-grid"));
-  assert.ok(settingsPage.indexOf("<AgentSourcesPanel") < settingsPage.indexOf("<CustomImportersPanel"));
-  assert.ok(settingsPage.indexOf("<GitHubSyncPanel") < settingsPage.indexOf("<DeviceDatasetsPanel"));
+  assert.ok(
+    settingsPage.indexOf("<AgentSourcesPanel") <
+      settingsPage.indexOf("<CustomImportersPanel"),
+  );
+  assert.ok(
+    settingsPage.indexOf("<GitHubSyncPanel") <
+      settingsPage.indexOf("<DeviceDatasetsPanel"),
+  );
   assert.ok(settingsPage.includes("同步概览"));
   assert.ok(settingsPage.includes("数据来源"));
   assert.ok(settingsPage.includes("多设备"));
@@ -272,7 +296,11 @@ test("primary page headings avoid redundant English eyebrow labels", () => {
   for (const file of files) {
     const source = readProjectFile(file);
     for (const label of removedLabels) {
-      assert.equal(source.includes(`className="eyebrow">${label}`), false, `${file}: ${label}`);
+      assert.equal(
+        source.includes(`className="eyebrow">${label}`),
+        false,
+        `${file}: ${label}`,
+      );
     }
   }
 });
@@ -315,7 +343,9 @@ test("overview visual treatment keeps content but reduces card framing", () => {
 
 test("non-overview pages reuse the overview report visual treatment", () => {
   const styles = readProjectFile("src/styles.css");
-  const dimensionIndex = readProjectFile("src/components/DimensionIndexPage.tsx");
+  const dimensionIndex = readProjectFile(
+    "src/components/DimensionIndexPage.tsx",
+  );
   const pageSkinStart = styles.indexOf("Page-wide report skin");
   const pageSkin = styles.slice(pageSkinStart);
 
@@ -326,7 +356,9 @@ test("non-overview pages reuse the overview report visual treatment", () => {
   assert.ok(pageSkin.includes(".dimension-detail"));
   assert.ok(pageSkin.includes(".settings-page"));
   assert.ok(pageSkin.includes(".dimension-list-grid"));
-  assert.ok(pageSkin.includes("grid-template-columns: repeat(3, minmax(260px, 1fr))"));
+  assert.ok(
+    pageSkin.includes("grid-template-columns: repeat(3, minmax(260px, 1fr))"),
+  );
   assert.ok(pageSkin.includes(".calls-filter-bar"));
   assert.ok(pageSkin.includes(".settings-section"));
   assert.ok(pageSkin.includes("border-radius: 0"));
@@ -344,7 +376,11 @@ test("frontend date windows use local calendar dates instead of UTC ISO dates", 
   ];
 
   for (const file of files) {
-    assert.equal(readProjectFile(file).includes("toISOString().slice(0, 10)"), false, file);
+    assert.equal(
+      readProjectFile(file).includes("toISOString().slice(0, 10)"),
+      false,
+      file,
+    );
   }
 });
 
@@ -353,7 +389,9 @@ test("overview supports custom history date ranges and richer daily charts", () 
   const chart = readProjectFile("src/components/MiniSeriesChart.tsx");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
-  const dashboardCommands = readProjectFile("src-tauri/src/commands/dashboard.rs");
+  const dashboardCommands = readProjectFile(
+    "src-tauri/src/commands/dashboard.rs",
+  );
 
   assert.ok(appShell.includes("customFrom"));
   assert.ok(appShell.includes("customTo"));
@@ -361,7 +399,11 @@ test("overview supports custom history date ranges and richer daily charts", () 
   assert.ok(appShell.includes("90d"));
   assert.ok(appShell.includes('type="date"'));
   assert.ok(appShell.includes("agentSeries"));
-  assert.ok(appShell.includes('getDailyUsageSeries(dateWindow.from, dateWindow.to, "agent")'));
+  assert.ok(
+    appShell.includes(
+      'getDailyUsageSeries(dateWindow.from, dateWindow.to, "agent")',
+    ),
+  );
   assert.ok(appShell.includes("agentPoints={agentSeries}"));
   assert.ok(appShell.includes("overview-focus"));
   assert.ok(appShell.includes("overview-secondary"));
@@ -395,9 +437,9 @@ test("top ranking lists constrain long labels without overflowing cards", () => 
 
   assert.ok(topList.includes("formatTopDimensionLabel"));
   assert.ok(topList.includes("title={row.dimension}"));
-  assert.ok(topList.includes("className=\"top-list-label\""));
-  assert.ok(topList.includes("className=\"top-list-value\""));
-  assert.ok(appShell.includes("kind=\"session\""));
+  assert.ok(topList.includes('className="top-list-label"'));
+  assert.ok(topList.includes('className="top-list-value"'));
+  assert.ok(appShell.includes('kind="session"'));
   assert.ok(styles.includes(".top-list-table"));
   assert.ok(styles.includes("table-layout: fixed"));
   assert.ok(styles.includes(".top-list-label"));
@@ -419,7 +461,7 @@ test("overview token numbers use compact labels while preserving exact hover val
   assert.ok(chart.includes("formatInteger(value, locale)"));
   assert.ok(chart.includes("title={`${formatInteger(chartData.totalTokens"));
   assert.ok(topList.includes("formatTokenByDisplayMode"));
-  assert.ok(topList.includes("variant === \"overview\""));
+  assert.ok(topList.includes('variant === "overview"'));
   assert.ok(topList.includes("title={formatInteger(row.total_tokens"));
 });
 
@@ -458,11 +500,15 @@ test("application settings controls stay contained in a balanced settings grid",
   assert.ok(settingsPage.includes("language-card"));
   assert.ok(settingsPage.includes("app-update-card"));
   assert.ok(styles.includes(".settings-app-grid"));
-  assert.ok(styles.includes("grid-template-columns: repeat(3, minmax(260px, 1fr))"));
+  assert.ok(
+    styles.includes("grid-template-columns: repeat(3, minmax(260px, 1fr))"),
+  );
   assert.ok(styles.includes(".settings-app-grid .settings-heading"));
   assert.ok(styles.includes("flex-direction: column"));
   assert.ok(styles.includes(".display-mode-segmented"));
-  assert.ok(styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"));
+  assert.ok(
+    styles.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+  );
   assert.ok(styles.includes(".settings-app-grid > .panel:not(:nth-child(3n))"));
   assert.ok(styles.includes("@media (max-width: 1280px)"));
 });
@@ -508,8 +554,8 @@ test("side rail sync status uses a top-layer custom popover", () => {
   const styles = readProjectFile("src/styles.css");
 
   assert.ok(appShell.includes("rail-status-popover"));
-  assert.ok(appShell.includes("id=\"sync-status-popover\""));
-  assert.ok(appShell.includes("aria-describedby=\"sync-status-popover\""));
+  assert.ok(appShell.includes('id="sync-status-popover"'));
+  assert.ok(appShell.includes('aria-describedby="sync-status-popover"'));
   assert.equal(appShell.includes("title={syncStatusTitle}"), false);
   assert.ok(styles.includes(".rail-status-popover"));
   assert.ok(styles.includes("z-index: 2147483000"));
@@ -544,15 +590,32 @@ test("action notices use auto-dismiss toast tips with hover persistence", () => 
 test("desktop tray exposes a today token pulse with historical average comparison", () => {
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
   const trayStatus = readProjectFile("src-tauri/src/tray_status.rs");
-  const dashboardCommands = readProjectFile("src-tauri/src/commands/dashboard.rs");
+  const dashboardCommands = readProjectFile(
+    "src-tauri/src/commands/dashboard.rs",
+  );
   const dashboardModels = readProjectFile("src-tauri/src/db/models.rs");
   const repository = readProjectFile("src-tauri/src/db/repository.rs");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const dashboardTypes = readProjectFile("src/types/dashboard.ts");
   const appShell = readProjectFile("src/app/App.tsx");
-  const tokenPulseWindow = readProjectFile("src/components/TokenPulseWindow.tsx");
-  const defaultCapability = readProjectFile("src-tauri/capabilities/default.json");
-  const styles = readProjectFile("src/styles.css");
+  const tokenPulseWindow = readProjectFiles([
+    "src/components/TokenPulseWindow.tsx",
+    "src/components/tokenPulse/hooks.ts",
+    "src/components/tokenPulse/Icons.tsx",
+    "src/components/tokenPulse/viewModel.ts",
+    "src/components/tokenPulse/Rings.tsx",
+    "src/components/tokenPulse/CodexUsageLimitsPanel.tsx",
+  ]);
+  const defaultCapability = readProjectFile(
+    "src-tauri/capabilities/default.json",
+  );
+  const tokenPulseCapability = readProjectFile(
+    "src-tauri/capabilities/token-pulse.json",
+  );
+  const styles = readProjectFiles([
+    "src/styles.css",
+    "src/styles/token-pulse.css",
+  ]);
 
   assert.ok(tauriEntrypoint.includes("mod tray_status"));
   assert.ok(tauriEntrypoint.includes("tray_status::setup_token_pulse_tray"));
@@ -584,7 +647,9 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(trayStatus.includes("detail_width: Option<f64>"));
   assert.ok(trayStatus.includes("detail_height: Option<f64>"));
   assert.ok(trayStatus.includes("TokenPulseInteractionState"));
-  assert.ok(trayStatus.includes("get_webview_window(TOKEN_PULSE_DETAIL_WINDOW_LABEL)"));
+  assert.ok(
+    trayStatus.includes("get_webview_window(TOKEN_PULSE_DETAIL_WINDOW_LABEL)"),
+  );
   assert.ok(trayStatus.includes('hovered && source == "mini"'));
   assert.ok(trayStatus.includes(".show()"));
   assert.ok(trayStatus.includes(".hide()"));
@@ -612,7 +677,9 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(appShell.includes("TokenPulseDetailWindow"));
   assert.ok(appShell.includes("isTokenPulseWindow"));
   assert.ok(appShell.includes("isTokenPulseDetailWindow"));
-  assert.ok(tauriEntrypoint.includes("tray_status::set_token_pulse_detail_hovered"));
+  assert.ok(
+    tauriEntrypoint.includes("tray_status::set_token_pulse_detail_hovered"),
+  );
   assert.ok(tauriEntrypoint.includes("tray_status::set_token_pulse_dragging"));
   assert.ok(tokenPulseWindow.includes("setTokenPulseDetailHovered"));
   assert.ok(tokenPulseWindow.includes("detailWidth"));
@@ -632,14 +699,35 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(tokenPulseWindow.includes("disabled={isRefreshing}"));
   assert.ok(tokenPulseWindow.includes("refreshPulseSnapshot"));
   assert.ok(tokenPulseWindow.includes("refreshCodexUsageLimits"));
-  assert.ok(tokenPulseWindow.includes("logTokenPulsePerf(\"manual_refresh.today_sync\""));
-  assert.equal(tokenPulseWindow.includes("logTokenPulsePerf(\"manual_refresh.background_sync\""), false);
-  assert.ok(tokenPulseWindow.includes("logTokenPulsePerf(\"manual_refresh.codex_usage\""));
-  assert.ok(tokenPulseWindow.includes("logTokenPulsePerf(\"manual_refresh.pulse_snapshot\""));
-  const tokenPulseCodexRefreshStartIndex = tokenPulseWindow.indexOf("const codexUsageLimitsRefresh = viewModel.showCodexUsageLimits");
-  const tokenPulseManualSyncIndex = tokenPulseWindow.indexOf("await syncTodayTokenPulseData()");
-  const tokenPulseManualPulseRefreshIndex = tokenPulseWindow.indexOf("viewModel.refreshPulseSnapshot({ showDelta: false })");
-  const tokenPulseManualCodexAwaitIndex = tokenPulseWindow.indexOf("codexUsageLimitsRefresh,", tokenPulseManualSyncIndex);
+  assert.ok(
+    tokenPulseWindow.includes('logTokenPulsePerf("manual_refresh.today_sync"'),
+  );
+  assert.equal(
+    tokenPulseWindow.includes(
+      'logTokenPulsePerf("manual_refresh.background_sync"',
+    ),
+    false,
+  );
+  assert.ok(
+    tokenPulseWindow.includes('logTokenPulsePerf("manual_refresh.codex_usage"'),
+  );
+  assert.ok(tokenPulseWindow.includes('"manual_refresh.pulse_snapshot"'));
+  const tokenPulseWindowShell = readProjectFile(
+    "src/components/TokenPulseWindow.tsx",
+  );
+  const tokenPulseCodexRefreshStartIndex = tokenPulseWindowShell.indexOf(
+    "const codexUsageLimitsRefresh = viewModel.showCodexUsageLimits",
+  );
+  const tokenPulseManualSyncIndex = tokenPulseWindowShell.indexOf(
+    "await syncTodayTokenPulseData()",
+  );
+  const tokenPulseManualPulseRefreshIndex = tokenPulseWindowShell.indexOf(
+    "viewModel.refreshPulseSnapshot({ showDelta: false })",
+  );
+  const tokenPulseManualCodexAwaitIndex = tokenPulseWindowShell.indexOf(
+    "codexUsageLimitsRefresh,",
+    tokenPulseCodexRefreshStartIndex,
+  );
   assert.ok(tokenPulseCodexRefreshStartIndex > -1);
   assert.ok(tokenPulseManualSyncIndex > -1);
   assert.ok(tokenPulseCodexRefreshStartIndex < tokenPulseManualSyncIndex);
@@ -653,23 +741,38 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(tokenPulseWindow.includes("token-pulse-ring-svg"));
   assert.ok(tokenPulseWindow.includes("strokeDasharray"));
   assert.ok(tokenPulseWindow.includes("strokeDashoffset"));
-  assert.ok(tokenPulseWindow.includes("strokeLinecap=\"round\""));
+  assert.ok(tokenPulseWindow.includes('strokeLinecap="round"'));
   assert.ok(tokenPulseWindow.includes('r="20"'));
   assert.equal(tokenPulseWindow.includes('r="18"'), false);
   assert.ok(tokenPulseWindow.includes("TOKEN_PULSE_TODAY_RING_STAGES"));
   assert.ok(tokenPulseWindow.includes("buildTodayRingPalette"));
   assert.ok(tokenPulseWindow.includes("getRingProgressPercent"));
   assert.ok(tokenPulseWindow.includes("percent % 100"));
-  assert.ok(tokenPulseWindow.includes("Math.max(0, snapshot.ratio_to_average * 100)"));
-  assert.equal(tokenPulseWindow.includes("Math.min(100, snapshot.ratio_to_average * 100)"), false);
-  assert.ok(tokenPulseWindow.includes("--ring-color"));
-  assert.ok(tokenPulseWindow.includes("--ring-track"));
+  assert.ok(
+    tokenPulseWindow.includes("Math.max(0, snapshot.ratio_to_average * 100)"),
+  );
+  assert.equal(
+    tokenPulseWindow.includes("Math.min(100, snapshot.ratio_to_average * 100)"),
+    false,
+  );
+  assert.ok(styles.includes("--ring-color"));
+  assert.ok(styles.includes("--ring-track"));
   assert.ok(tokenPulseWindow.includes("formatCodexMiniCountdown"));
   assert.ok(tokenPulseWindow.includes("resets_at * 1000 - nowMs"));
   assert.ok(tokenPulseWindow.includes("Math.ceil(remainingMs / 60_000)"));
   assert.ok(tokenPulseWindow.includes("getDisplayedCodexUsageLimitWindow"));
-  assert.ok(tokenPulseWindow.includes("return { ...limit, used_percent: 0, remaining_percent: 100 }"));
-  assert.ok(tokenPulseWindow.includes("setSnapshot((previousSnapshot) => nextSnapshot ?? previousSnapshot)"));
+  assert.ok(
+    tokenPulseWindow.includes(
+      "return { ...limit, used_percent: 0, remaining_percent: 100 }",
+    ),
+  );
+  assert.ok(tokenPulseWindow.includes("setSnapshot(nextSnapshot);"));
+  assert.equal(
+    tokenPulseWindow.includes(
+      "setSnapshot((previousSnapshot) => nextSnapshot ?? previousSnapshot)",
+    ),
+    false,
+  );
   assert.ok(tokenPulseWindow.includes("useNowMs(showCodexUsageLimits)"));
   assert.ok(tokenPulseWindow.includes("token-pulse-ring-value"));
   assert.ok(tokenPulseWindow.includes("is-compact"));
@@ -679,7 +782,12 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(tokenPulseWindow.includes("token-pulse-mini-label"));
   assert.equal(tokenPulseWindow.includes("token-pulse-meter"), false);
   assert.equal(tokenPulseWindow.includes("token-pulse-mini-subline"), false);
-  assert.equal(tokenPulseWindow.includes("<TokenPulseTrendIcon direction={viewModel.trendDirection} />"), false);
+  assert.equal(
+    tokenPulseWindow.includes(
+      "<TokenPulseTrendIcon direction={viewModel.trendDirection} />",
+    ),
+    false,
+  );
   assert.ok(tokenPulseWindow.includes("TOKEN_PULSE_REFRESH_MS = 60000"));
   assert.ok(tokenPulseWindow.includes("TOKEN_PULSE_DELTA_VISIBLE_MS = 10000"));
   assert.ok(tokenPulseWindow.includes("previousPulseSnapshotRef"));
@@ -688,24 +796,43 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(tokenPulseWindow.includes("manualDeltaAggregationRef"));
   assert.ok(tokenPulseWindow.includes("beginPulseDeltaAggregation"));
   assert.ok(tokenPulseWindow.includes("finishPulseDeltaAggregation"));
-  assert.ok(tokenPulseWindow.includes("refreshPulseSnapshot({ showDelta: false })"));
-  assert.ok(tokenPulseWindow.includes("previous.todayLocal === nextSnapshot.today_local"));
-  assert.ok(tokenPulseWindow.includes("nextSnapshot.today_tokens - previous.todayTokens"));
-  assert.ok(tokenPulseWindow.includes("formatTokenByDisplayMode(snapshot.today_tokens"));
-  assert.ok(tokenPulseWindow.includes("formatTokenByDisplayMode(todayDeltaTokens"));
+  assert.ok(
+    tokenPulseWindow.includes("refreshPulseSnapshot({ showDelta: false })"),
+  );
+  assert.ok(
+    tokenPulseWindow.includes(
+      "previous.todayLocal === nextSnapshot.today_local",
+    ),
+  );
+  assert.ok(
+    tokenPulseWindow.includes(
+      "nextSnapshot.today_tokens - previous.todayTokens",
+    ),
+  );
+  assert.ok(
+    tokenPulseWindow.includes("formatTokenByDisplayMode(snapshot.today_tokens"),
+  );
+  assert.ok(
+    tokenPulseWindow.includes("formatTokenByDisplayMode(todayDeltaTokens"),
+  );
   assert.ok(tokenPulseWindow.includes("token-pulse-delta-chip"));
-  assert.equal(tokenPulseWindow.includes("token-pulse-mini-value-stack"), false);
+  assert.equal(
+    tokenPulseWindow.includes("token-pulse-mini-value-stack"),
+    false,
+  );
   assert.ok(tokenPulseWindow.includes("ratio_to_average"));
   assert.ok(tokenPulseWindow.includes("hourly_tokens"));
-  assert.ok(tokenPulseWindow.includes("export function TokenPulseDetailWindow"));
+  assert.ok(
+    tokenPulseWindow.includes("export function TokenPulseDetailWindow"),
+  );
   assert.ok(tokenPulseWindow.includes("token-pulse-mini"));
   assert.ok(tokenPulseWindow.includes("token-pulse-detail"));
   assert.ok(tokenPulseWindow.includes("onPointerEnter"));
   assert.ok(tokenPulseWindow.includes("onPointerLeave"));
   assert.ok(tokenPulseWindow.includes("onPointerDown"));
   assert.ok(tokenPulseWindow.includes("startDragging()"));
-  assert.ok(tokenPulseWindow.includes("startDragging();\n    } catch"));
-  assert.ok(tokenPulseWindow.includes("} finally {\n      finishDrag();"));
+  assert.ok(tokenPulseWindow.includes("} catch {"));
+  assert.ok(tokenPulseWindow.includes("} finally {"));
   assert.ok(tokenPulseWindow.includes("finishDrag();"));
   assert.equal(tokenPulseWindow.includes("onPointerMove"), false);
   assert.equal(tokenPulseWindow.includes("onLostPointerCapture"), false);
@@ -715,24 +842,35 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(tokenPulseWindow.includes("token-pulse-action-button"));
   assert.ok(tokenPulseWindow.includes("TokenPulseActionIcon"));
   assert.ok(tokenPulseWindow.includes("token-pulse-action-icon"));
-  assert.ok(tokenPulseWindow.includes("TokenPulseDatabaseIcon"));
   assert.ok(tokenPulseWindow.includes("TokenPulseHourlyChart"));
   assert.ok(tokenPulseWindow.includes("token-pulse-hour-chart"));
-  assert.ok(tokenPulseWindow.includes("viewBox=\"0 0 304 86\""));
+  assert.ok(tokenPulseWindow.includes('viewBox="0 0 304 86"'));
   assert.ok(tokenPulseWindow.includes("openTokenPulseHome"));
   assert.ok(tokenPulseWindow.includes("hideTokenPulseWindow"));
   assert.ok(tokenPulseWindow.includes("refreshSnapshot"));
-  assert.ok(tokenPulseWindow.includes("aria-label=\"打开主页\""));
-  assert.ok(tokenPulseWindow.includes("aria-label={isPositionLocked ? \"解锁位置\" : \"锁定位置\"}"));
-  assert.ok(tokenPulseWindow.includes("kind={isPositionLocked ? \"lock\" : \"unlock\"}"));
-  assert.equal(tokenPulseWindow.includes("kind={isPositionLocked ? \"unlock\" : \"lock\"}"), false);
-  assert.ok(tokenPulseWindow.includes("aria-label=\"刷新数据\""));
-  assert.ok(tokenPulseWindow.includes("aria-label=\"隐藏小窗\""));
+  assert.ok(tokenPulseWindow.includes('aria-label="打开主页"'));
+  assert.ok(
+    tokenPulseWindow.includes(
+      'aria-label={isPositionLocked ? "解锁位置" : "锁定位置"}',
+    ),
+  );
+  assert.ok(
+    tokenPulseWindow.includes('kind={isPositionLocked ? "lock" : "unlock"}'),
+  );
+  assert.equal(
+    tokenPulseWindow.includes('kind={isPositionLocked ? "unlock" : "lock"}'),
+    false,
+  );
+  assert.ok(tokenPulseWindow.includes('aria-label="刷新数据"'));
+  assert.ok(tokenPulseWindow.includes('aria-label="隐藏小窗"'));
   assert.equal(tokenPulseWindow.includes("data-tauri-drag-region"), false);
   assert.equal(tokenPulseWindow.includes("title={todayTitle}"), false);
   assert.equal(tokenPulseWindow.includes("token-pulse-detail-main"), false);
   assert.equal(tokenPulseWindow.includes("detail-meter"), false);
-  assert.equal(tokenPulseWindow.includes("token-pulse-hours detail-hours"), false);
+  assert.equal(
+    tokenPulseWindow.includes("token-pulse-hours detail-hours"),
+    false,
+  );
   assert.ok(tokenPulseWindow.includes("comparisonLabel"));
   assert.ok(tokenPulseWindow.includes("token-pulse-comparison"));
   assert.ok(styles.includes(".token-pulse-shell"));
@@ -762,7 +900,10 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(styles.includes("top: 2px;"));
   assert.equal(styles.includes(".token-pulse-mini-value-stack"), false);
   assert.ok(styles.includes("@keyframes token-pulse-delta-pop"));
-  assert.equal(styles.includes("border: 1px solid rgb(255 255 255 / 10%)"), false);
+  assert.equal(
+    styles.includes("border: 1px solid rgb(255 255 255 / 10%)"),
+    false,
+  );
   assert.equal(styles.includes("@property --ring-progress"), false);
   assert.equal(styles.includes("conic-gradient"), false);
   assert.equal(styles.includes(".token-pulse-ring::before"), false);
@@ -781,7 +922,9 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.equal(styles.includes("-webkit-app-region: drag"), false);
   assert.ok(styles.includes("cursor: grab"));
   assert.ok(styles.includes("cursor: grabbing"));
-  assert.ok(styles.includes(".token-pulse-drag-handle.token-pulse-locked:active"));
+  assert.ok(
+    styles.includes(".token-pulse-drag-handle.token-pulse-locked:active"),
+  );
   assert.ok(styles.includes(".token-pulse-detail"));
   assert.equal(styles.includes(".token-pulse-meter"), false);
 
@@ -791,7 +934,9 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(dashboardModels.includes("pub today_tokens: i64"));
   assert.ok(dashboardModels.includes("pub average_daily_tokens: f64"));
   assert.ok(dashboardModels.includes("pub ratio_to_average: Option<f64>"));
-  assert.ok(dashboardModels.includes("pub hourly_tokens: Vec<TokenPulseHourlyPoint>"));
+  assert.ok(
+    dashboardModels.includes("pub hourly_tokens: Vec<TokenPulseHourlyPoint>"),
+  );
 
   assert.ok(repository.includes("pub async fn token_pulse_snapshot"));
   assert.ok(repository.includes("daily_usage_series"));
@@ -814,19 +959,32 @@ test("desktop tray exposes a today token pulse with historical average compariso
   assert.ok(dashboardService.includes("getCodexUsageLimits"));
   assert.ok(dashboardService.includes("syncTodayTokenPulseData"));
   assert.ok(dashboardService.includes("sync_today_token_pulse_data"));
-  assert.ok(dashboardCommands.includes("pub async fn sync_today_token_pulse_data"));
-  assert.ok(tauriEntrypoint.includes("commands::dashboard::sync_today_token_pulse_data"));
-  assert.ok(defaultCapability.includes('"token-pulse"'));
-  assert.ok(defaultCapability.includes('"token-pulse-detail"'));
-  assert.ok(defaultCapability.includes("core:window:allow-set-size"));
-  assert.ok(defaultCapability.includes("core:window:allow-set-position"));
+  assert.ok(
+    dashboardCommands.includes("pub async fn sync_today_token_pulse_data"),
+  );
+  assert.ok(
+    tauriEntrypoint.includes(
+      "commands::dashboard::sync_today_token_pulse_data",
+    ),
+  );
+  assert.equal(defaultCapability.includes('"token-pulse"'), false);
+  assert.equal(defaultCapability.includes('"token-pulse-detail"'), false);
+  assert.ok(tokenPulseCapability.includes('"token-pulse"'));
+  assert.ok(tokenPulseCapability.includes('"token-pulse-detail"'));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-set-size"));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-set-position"));
 });
 
 test("token pulse codex usage display is optional and defaults off", () => {
   const displayPreference = readProjectFile("src/preferences/display.tsx");
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
-  const tokenPulseWindow = readProjectFile("src/components/TokenPulseWindow.tsx");
-  const styles = readProjectFile("src/styles.css");
+  const tokenPulseWindow = readProjectFile(
+    "src/components/TokenPulseWindow.tsx",
+  );
+  const styles = readProjectFiles([
+    "src/styles.css",
+    "src/styles/token-pulse.css",
+  ]);
 
   assert.ok(displayPreference.includes("showCodexUsageLimits: boolean"));
   assert.ok(displayPreference.includes("setShowCodexUsageLimits"));
@@ -839,7 +997,11 @@ test("token pulse codex usage display is optional and defaults off", () => {
   assert.ok(tokenPulseWindow.includes("showCodexUsageLimits ?"));
   assert.ok(tokenPulseWindow.includes("token-pulse-detail-body"));
   assert.ok(styles.includes("grid-template-columns: minmax(0, 1fr) auto"));
-  assert.ok(styles.includes("grid-template-columns: minmax(0, 1fr) minmax(112px, auto) auto"));
+  assert.ok(
+    styles.includes(
+      "grid-template-columns: minmax(0, 1fr) minmax(112px, auto) auto",
+    ),
+  );
   assert.ok(styles.includes(".token-pulse-detail-body"));
   assert.ok(styles.includes(".token-pulse-detail-body.has-codex"));
 });
@@ -848,8 +1010,15 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   const trayStatus = readProjectFile("src-tauri/src/tray_status.rs");
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
-  const tokenPulseWindow = readProjectFile("src/components/TokenPulseWindow.tsx");
-  const defaultCapability = readProjectFile("src-tauri/capabilities/default.json");
+  const tokenPulseWindow = readProjectFile(
+    "src/components/TokenPulseWindow.tsx",
+  );
+  const defaultCapability = readProjectFile(
+    "src-tauri/capabilities/default.json",
+  );
+  const tokenPulseCapability = readProjectFile(
+    "src-tauri/capabilities/token-pulse.json",
+  );
 
   assert.ok(trayStatus.includes("MenuBuilder"));
   assert.ok(trayStatus.includes("MenuItemBuilder"));
@@ -862,9 +1031,21 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   assert.ok(trayStatus.includes("show_menu_on_left_click(false)"));
   assert.ok(trayStatus.includes(".menu(&tray_menu)"));
   assert.ok(trayStatus.includes("pub fn handle_token_pulse_menu_event"));
-  assert.ok(tauriEntrypoint.includes(".on_menu_event(tray_status::handle_token_pulse_menu_event)"));
-  assert.ok(trayStatus.includes("CheckMenuItemBuilder::with_id(TOKEN_PULSE_MENU_TOGGLE_VISIBLE"));
-  assert.ok(trayStatus.includes("token_pulse_window_currently_visible(manager.app_handle())"));
+  assert.ok(
+    tauriEntrypoint.includes(
+      ".on_menu_event(tray_status::handle_token_pulse_menu_event)",
+    ),
+  );
+  assert.ok(
+    trayStatus.includes(
+      "CheckMenuItemBuilder::with_id(TOKEN_PULSE_MENU_TOGGLE_VISIBLE",
+    ),
+  );
+  assert.ok(
+    trayStatus.includes(
+      "token_pulse_window_currently_visible(manager.app_handle())",
+    ),
+  );
   assert.ok(trayStatus.includes("set_token_pulse_tray_toggle_checked"));
   assert.ok(trayStatus.includes("set_checked(visible)"));
   assert.ok(trayStatus.includes("set_menu(Some(tray_menu))"));
@@ -889,12 +1070,22 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   assert.ok(trayStatus.includes("get_token_pulse_position_locked"));
   assert.ok(trayStatus.includes("show_token_pulse_context_menu"));
   assert.ok(trayStatus.includes("popup_menu"));
-  assert.ok(trayStatus.includes(".checked(token_pulse_position_locked(manager.app_handle()))"));
+  assert.ok(
+    trayStatus.includes(
+      ".checked(token_pulse_position_locked(manager.app_handle()))",
+    ),
+  );
   assert.ok(trayStatus.includes("if token_pulse_position_locked(&app)"));
 
-  assert.ok(trayStatus.includes("TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED: bool = false"));
+  assert.ok(
+    trayStatus.includes("TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED: bool = false"),
+  );
   assert.ok(trayStatus.includes("if TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED {"));
-  assert.ok(trayStatus.includes("TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED && is_probably_fullscreen()"));
+  assert.ok(
+    trayStatus.includes(
+      "TOKEN_PULSE_FULLSCREEN_GUARD_ENABLED && is_probably_fullscreen()",
+    ),
+  );
   assert.ok(trayStatus.includes("spawn_token_pulse_fullscreen_guard"));
   assert.ok(trayStatus.includes("is_probably_fullscreen"));
   assert.ok(trayStatus.includes("hide_for_fullscreen"));
@@ -902,9 +1093,15 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   assert.ok(trayStatus.includes("was_visible_before_fullscreen"));
   assert.ok(trayStatus.includes("hide_token_pulse_detail_window"));
 
-  assert.ok(tauriEntrypoint.includes("tray_status::show_token_pulse_context_menu"));
-  assert.ok(tauriEntrypoint.includes("tray_status::get_token_pulse_position_locked"));
-  assert.ok(tauriEntrypoint.includes("tray_status::set_token_pulse_position_locked"));
+  assert.ok(
+    tauriEntrypoint.includes("tray_status::show_token_pulse_context_menu"),
+  );
+  assert.ok(
+    tauriEntrypoint.includes("tray_status::get_token_pulse_position_locked"),
+  );
+  assert.ok(
+    tauriEntrypoint.includes("tray_status::set_token_pulse_position_locked"),
+  );
 
   assert.ok(dashboardService.includes("showTokenPulseContextMenu"));
   assert.ok(dashboardService.includes("show_token_pulse_context_menu"));
@@ -921,18 +1118,37 @@ test("token pulse tray and mini window expose menus and avoid fullscreen overlay
   assert.ok(tokenPulseWindow.includes("if (isPositionLocked)"));
   assert.ok(tokenPulseWindow.includes("token-pulse-locked"));
 
-  assert.ok(defaultCapability.includes("core:window:allow-show"));
-  assert.ok(defaultCapability.includes("core:window:allow-hide"));
+  assert.equal(defaultCapability.includes("token-pulse"), false);
+  assert.ok(
+    tokenPulseCapability.includes(
+      '"windows": ["token-pulse", "token-pulse-detail"]',
+    ),
+  );
+  assert.ok(tokenPulseCapability.includes("core:window:allow-start-dragging"));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-set-size"));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-set-position"));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-outer-position"));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-outer-size"));
+  assert.ok(tokenPulseCapability.includes("core:window:allow-scale-factor"));
+  assert.equal(tokenPulseCapability.includes("dialog:"), false);
+  assert.equal(tokenPulseCapability.includes("process:"), false);
+  assert.equal(tokenPulseCapability.includes("updater:"), false);
 });
 
 test("settings page exposes configurable sqlite importers without proxy capture", () => {
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
-  const customImportersPanel = readProjectFile("src/components/CustomImportersPanel.tsx");
+  const customImportersPanel = readProjectFile(
+    "src/components/CustomImportersPanel.tsx",
+  );
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const dashboardTypes = readProjectFile("src/types/dashboard.ts");
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
-  const dashboardCommands = readProjectFile("src-tauri/src/commands/dashboard.rs");
-  const customSqliteImporter = readProjectFile("src-tauri/src/importers/custom_sqlite.rs");
+  const dashboardCommands = readProjectFile(
+    "src-tauri/src/commands/dashboard.rs",
+  );
+  const customSqliteImporter = readProjectFile(
+    "src-tauri/src/importers/custom_sqlite.rs",
+  );
 
   assert.ok(settingsPage.includes("CustomImportersPanel"));
   assert.ok(customImportersPanel.includes("previewCustomImporter"));
@@ -964,17 +1180,21 @@ test("settings page exposes configurable sqlite importers without proxy capture"
 
 test("settings page supports device dataset packages for multi-device merge", () => {
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
-  const deviceDatasetsPanel = readProjectFile("src/components/DeviceDatasetsPanel.tsx");
+  const deviceDatasetsPanel = readProjectFile(
+    "src/components/DeviceDatasetsPanel.tsx",
+  );
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const dashboardTypes = readProjectFile("src/types/dashboard.ts");
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
-  const settingsCommands = readProjectFile("src-tauri/src/commands/settings.rs");
+  const settingsCommands = readProjectFile(
+    "src-tauri/src/commands/settings.rs",
+  );
 
   assert.ok(settingsPage.includes("DeviceDatasetsPanel"));
   assert.ok(deviceDatasetsPanel.includes(".tokenscope"));
   assert.ok(deviceDatasetsPanel.includes("@tauri-apps/plugin-dialog"));
   assert.ok(deviceDatasetsPanel.includes("directory: true"));
-  assert.ok(deviceDatasetsPanel.includes("extensions: [\"tokenscope\"]"));
+  assert.ok(deviceDatasetsPanel.includes('extensions: ["tokenscope"]'));
   assert.ok(deviceDatasetsPanel.includes("选择导出目录"));
   assert.ok(deviceDatasetsPanel.includes("选择并导入"));
   assert.ok(deviceDatasetsPanel.includes("导出本机数据包"));
@@ -1008,8 +1228,13 @@ test("settings page exposes github encrypted sync controls", () => {
   const dashboardService = readProjectFile("src/services/dashboard.ts");
   const dashboardTypes = readProjectFile("src/types/dashboard.ts");
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
-  const settingsCommands = readProjectFile("src-tauri/src/commands/settings.rs");
-  const styles = readProjectFile("src/styles.css");
+  const settingsCommands = readProjectFile(
+    "src-tauri/src/commands/settings.rs",
+  );
+  const styles = readProjectFiles([
+    "src/styles.css",
+    "src/styles/github-sync.css",
+  ]);
 
   assert.ok(settingsPage.includes("GitHubSyncPanel"));
   assert.ok(githubSyncPanel.includes("GitHub 同步"));
@@ -1031,7 +1256,11 @@ test("settings page exposes github encrypted sync controls", () => {
   assert.ok(githubSyncPanel.includes("lastMessageLabel"));
   assert.ok(githubSyncPanel.includes("最近结果"));
   assert.ok(githubSyncPanel.includes("window.setInterval"));
-  assert.ok(githubSyncPanel.includes("await refreshGitHubSyncSettings({ resetDraft: false })"));
+  assert.ok(
+    githubSyncPanel.includes(
+      "await refreshGitHubSyncSettings({ resetDraft: false })",
+    ),
+  );
   assert.ok(githubSyncPanel.includes("GitHubSyncRemoteDeviceList"));
   assert.ok(githubSyncPanel.includes("handleForceRemoteReimport"));
   assert.ok(githubSyncPanel.includes("forceReimportGitHubSyncRemoteDevice"));
@@ -1051,7 +1280,9 @@ test("settings page exposes github encrypted sync controls", () => {
   assert.ok(dashboardService.includes("save_github_sync_settings"));
   assert.ok(dashboardService.includes("test_github_sync_connection"));
   assert.ok(dashboardService.includes("run_github_sync_once"));
-  assert.ok(dashboardService.includes("force_reimport_github_sync_remote_device"));
+  assert.ok(
+    dashboardService.includes("force_reimport_github_sync_remote_device"),
+  );
   assert.ok(dashboardService.includes("get_github_sync_runtime_status"));
   assert.ok(dashboardService.includes("list_github_sync_remote_devices"));
   assert.ok(dashboardTypes.includes("interface GitHubSyncSettings"));
@@ -1066,15 +1297,21 @@ test("settings page exposes github encrypted sync controls", () => {
   assert.ok(tauriEntrypoint.includes("save_github_sync_settings"));
   assert.ok(tauriEntrypoint.includes("test_github_sync_connection"));
   assert.ok(tauriEntrypoint.includes("run_github_sync_once"));
-  assert.ok(tauriEntrypoint.includes("force_reimport_github_sync_remote_device"));
+  assert.ok(
+    tauriEntrypoint.includes("force_reimport_github_sync_remote_device"),
+  );
   assert.ok(tauriEntrypoint.includes("get_github_sync_runtime_status"));
   assert.ok(tauriEntrypoint.includes("list_github_sync_remote_devices"));
   assert.ok(settingsCommands.includes("list_github_sync_remote_devices"));
-  assert.ok(settingsCommands.includes("force_reimport_github_sync_remote_device"));
+  assert.ok(
+    settingsCommands.includes("force_reimport_github_sync_remote_device"),
+  );
   assert.ok(settingsCommands.includes("github_sync_runtime"));
   assert.ok(settingsCommands.includes("github_sync"));
   assert.ok(settingsPage.includes("isAppUpdateBusy"));
-  assert.ok(settingsPage.includes("<GitHubSyncPanel onNotice={setNotice} isAppUpdateBusy={isAppUpdateBusy} />"));
+  assert.ok(settingsPage.includes("GitHubSyncPanel"));
+  assert.ok(settingsPage.includes("onNotice={setNotice}"));
+  assert.ok(settingsPage.includes("isAppUpdateBusy={isAppUpdateBusy}"));
   assert.ok(styles.includes(".github-sync-panel"));
   assert.ok(styles.includes(".github-sync-wizard"));
   assert.ok(styles.includes(".github-sync-form"));
@@ -1087,11 +1324,15 @@ test("settings page exposes github encrypted sync controls", () => {
 
 test("background sync interval allows one minute for github sync freshness", () => {
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
-  const dashboardCommand = readProjectFile("src-tauri/src/commands/dashboard.rs");
+  const dashboardCommand = readProjectFile(
+    "src-tauri/src/commands/dashboard.rs",
+  );
   const repository = readProjectFile("src-tauri/src/db/repository.rs");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
 
-  assert.ok(settingsPage.includes("const SYNC_INTERVAL_VALUES = [1, 5, 15, 30, 60]"));
+  assert.ok(
+    settingsPage.includes("const SYNC_INTERVAL_VALUES = [1, 5, 15, 30, 60]"),
+  );
   assert.ok(dashboardCommand.includes("input.interval_minutes.clamp(1, 1440)"));
   assert.ok(repository.includes("input.interval_minutes.clamp(1, 1440)"));
   assert.ok(repository.includes(".clamp(1, 1440)"));
@@ -1101,7 +1342,7 @@ test("background sync interval allows one minute for github sync freshness", () 
 test("windows release binary is configured without a console window", () => {
   const mainEntrypoint = readProjectFile("src-tauri/src/main.rs");
 
-  assert.ok(mainEntrypoint.includes("windows_subsystem = \"windows\""));
+  assert.ok(mainEntrypoint.includes('windows_subsystem = "windows"'));
   assert.ok(mainEntrypoint.includes("not(debug_assertions)"));
 });
 
@@ -1111,7 +1352,10 @@ test("release packaging uses a Windows installer instead of a bare executable on
   assert.equal(tauriConfig.bundle.active, true);
   assert.deepEqual(tauriConfig.bundle.targets, ["nsis"]);
   assert.equal(tauriConfig.bundle.windows.nsis.installerIcon, "icons/icon.ico");
-  assert.equal(tauriConfig.bundle.windows.nsis.uninstallerIcon, "icons/icon.ico");
+  assert.equal(
+    tauriConfig.bundle.windows.nsis.uninstallerIcon,
+    "icons/icon.ico",
+  );
 });
 
 test("desktop webview keeps a restrictive content security policy", () => {
@@ -1120,15 +1364,34 @@ test("desktop webview keeps a restrictive content security policy", () => {
   assert.equal(typeof tauriConfig.app.security.csp, "string");
   assert.ok(tauriConfig.app.security.csp.includes("default-src 'self'"));
   assert.ok(tauriConfig.app.security.csp.includes("script-src 'self'"));
-  assert.ok(tauriConfig.app.security.csp.includes("style-src 'self' 'unsafe-inline'"));
-  assert.equal(tauriConfig.app.security.csp.includes("script-src 'self' 'unsafe-inline'"), false);
+  assert.ok(tauriConfig.app.security.csp.includes("style-src 'self'"));
+  assert.equal(
+    tauriConfig.app.security.csp.includes("style-src 'self' 'unsafe-inline'"),
+    false,
+  );
+  assert.equal(
+    tauriConfig.app.security.csp.includes("script-src 'self' 'unsafe-inline'"),
+    false,
+  );
+  assert.equal(
+    /style=\{/.test(
+      readProjectFiles([
+        "src/components/SettingsPage.tsx",
+        "src/components/GitHubSyncPanel.tsx",
+        "src/components/tokenPulse/Rings.tsx",
+      ]),
+    ),
+    false,
+  );
 });
 
 test("application exposes a signed Tauri updater workflow", () => {
   const packageJson = JSON.parse(readProjectFile("package.json"));
   const cargoToml = readProjectFile("src-tauri/Cargo.toml");
   const tauriConfig = JSON.parse(readProjectFile("src-tauri/tauri.conf.json"));
-  const capabilities = JSON.parse(readProjectFile("src-tauri/capabilities/default.json"));
+  const capabilities = JSON.parse(
+    readProjectFile("src-tauri/capabilities/default.json"),
+  );
   const tauriEntrypoint = readProjectFile("src-tauri/src/lib.rs");
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
   const dashboardService = readProjectFile("src/services/dashboard.ts");
@@ -1146,9 +1409,16 @@ test("application exposes a signed Tauri updater workflow", () => {
     "https://github.com/RickChen764/tokenscope-desktop-public/releases/latest/download/latest.json",
   ]);
   assert.equal(tauriConfig.plugins.updater.windows.installMode, "passive");
-  assert.ok(capabilities.permissions.includes("updater:default"));
-  assert.ok(capabilities.permissions.includes("process:default"));
-  assert.ok(tauriEntrypoint.includes("tauri_plugin_updater::Builder::new().build()"));
+  assert.ok(capabilities.permissions.includes("updater:allow-check"));
+  assert.ok(
+    capabilities.permissions.includes("updater:allow-download-and-install"),
+  );
+  assert.ok(capabilities.permissions.includes("process:allow-restart"));
+  assert.equal(capabilities.permissions.includes("updater:default"), false);
+  assert.equal(capabilities.permissions.includes("process:default"), false);
+  assert.ok(
+    tauriEntrypoint.includes("tauri_plugin_updater::Builder::new().build()"),
+  );
   assert.ok(tauriEntrypoint.includes("tauri_plugin_process::init()"));
 
   assert.ok(settingsPage.includes("checkForAppUpdate"));
@@ -1170,10 +1440,18 @@ test("application exposes a signed Tauri updater workflow", () => {
   assert.ok(releaseScript.includes("_x64-setup.exe"));
   assert.ok(releaseScript.includes("UTF8Encoding"));
   assert.ok(releaseScript.includes("WriteAllText"));
-  assert.ok(releaseScript.includes('RepoFullName = "RickChen764/tokenscope-desktop-public"'));
+  assert.ok(
+    releaseScript.includes(
+      'RepoFullName = "RickChen764/tokenscope-desktop-public"',
+    ),
+  );
   assert.ok(releaseScript.includes("releases/download"));
   assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY_PATH"));
-  assert.ok(buildScript.includes("TAURI_SIGNING_PRIVATE_KEY = Read-Utf8Text -Path $keyPath"));
+  assert.ok(
+    buildScript.includes(
+      "TAURI_SIGNING_PRIVATE_KEY = Read-Utf8Text -Path $keyPath",
+    ),
+  );
   assert.ok(buildScript.includes("pnpm exec tauri build --ci"));
   assert.ok(buildScript.includes("tokenscope-desktop.key"));
 });
@@ -1193,10 +1471,18 @@ test("application updater keeps explicit persisted state and complete progress",
   assert.ok(dashboardService.includes("writeStoredAppUpdateInfo"));
   assert.ok(dashboardService.includes("getVersion"));
   assert.ok(dashboardService.includes("readCurrentAppVersion"));
-  assert.ok(dashboardService.includes("createAppUpdateInfo(pendingAppUpdate, currentVersion)"));
+  assert.ok(
+    dashboardService.includes(
+      "createAppUpdateInfo(pendingAppUpdate, currentVersion)",
+    ),
+  );
   assert.ok(dashboardService.includes("hasWrittenAppUpdateInfoThisSession"));
-  assert.ok(dashboardService.includes("recoverStoredAppUpdateInfo(storedInfo)"));
-  assert.ok(dashboardService.includes("hasWrittenAppUpdateInfoThisSession = true"));
+  assert.ok(
+    dashboardService.includes("recoverStoredAppUpdateInfo(storedInfo)"),
+  );
+  assert.ok(
+    dashboardService.includes("hasWrittenAppUpdateInfoThisSession = true"),
+  );
   assert.ok(dashboardService.includes('event.event === "Finished"'));
   assert.ok(dashboardService.includes("writeStoredAppUpdateInfo({"));
   assert.ok(settingsPage.includes("getStoredAppUpdateInfo"));
@@ -1222,7 +1508,9 @@ test("application updater keeps explicit persisted state and complete progress",
 });
 
 test("release manifest scripts validate versions and updater artifacts before publishing", () => {
-  const createLatestJsonScript = readProjectFile("scripts/create-latest-json.ps1");
+  const createLatestJsonScript = readProjectFile(
+    "scripts/create-latest-json.ps1",
+  );
   const buildReleaseScript = readProjectFile("scripts/build-release.ps1");
 
   assert.ok(createLatestJsonScript.includes("Get-PackageVersion"));
@@ -1241,10 +1529,16 @@ test("release manifest scripts validate versions and updater artifacts before pu
 
 test("powershell release scripts pin UTF-8 boundaries for Chinese release text", () => {
   const buildReleaseScript = readProjectFile("scripts/build-release.ps1");
-  const createLatestJsonScript = readProjectFile("scripts/create-latest-json.ps1");
+  const createLatestJsonScript = readProjectFile(
+    "scripts/create-latest-json.ps1",
+  );
 
   for (const script of [buildReleaseScript, createLatestJsonScript]) {
-    assert.ok(script.includes("$script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)"));
+    assert.ok(
+      script.includes(
+        "$script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)",
+      ),
+    );
     assert.ok(script.includes("$OutputEncoding = $script:Utf8NoBom"));
     assert.ok(script.includes("[Console]::InputEncoding = $script:Utf8NoBom"));
     assert.ok(script.includes("[Console]::OutputEncoding = $script:Utf8NoBom"));
@@ -1258,8 +1552,18 @@ test("powershell release scripts pin UTF-8 boundaries for Chinese release text",
   assert.ok(createLatestJsonScript.includes("function Read-Utf8Text"));
   assert.ok(createLatestJsonScript.includes("function Write-Utf8Text"));
   assert.ok(createLatestJsonScript.includes("function Read-JsonFile"));
-  assert.equal(createLatestJsonScript.includes("Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json"), false);
-  assert.equal(createLatestJsonScript.includes("[System.IO.File]::WriteAllText($OutputPath"), false);
+  assert.equal(
+    createLatestJsonScript.includes(
+      "Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json",
+    ),
+    false,
+  );
+  assert.equal(
+    createLatestJsonScript.includes(
+      "[System.IO.File]::WriteAllText($OutputPath",
+    ),
+    false,
+  );
 });
 
 test("application and installer support Chinese and English localization", () => {
@@ -1269,7 +1573,10 @@ test("application and installer support Chinese and English localization", () =>
   const settingsPage = readProjectFile("src/components/SettingsPage.tsx");
   const miniSeriesChart = readProjectFile("src/components/MiniSeriesChart.tsx");
 
-  assert.deepEqual(tauriConfig.bundle.windows.nsis.languages, ["English", "SimpChinese"]);
+  assert.deepEqual(tauriConfig.bundle.windows.nsis.languages, [
+    "English",
+    "SimpChinese",
+  ]);
   assert.equal(tauriConfig.bundle.windows.nsis.displayLanguageSelector, false);
   assert.ok(i18nModule.includes("zh-CN"));
   assert.ok(i18nModule.includes("en-US"));
