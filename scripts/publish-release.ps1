@@ -283,19 +283,34 @@ function Repair-And-Assert-StagedDiff {
   Push-Location $WorkingDirectory
   try {
     $output = & git diff --check --cached 2>&1
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0) {
+    if ($LASTEXITCODE -eq 0) {
       return
     }
     $text = ($output | Out-String)
-    if ($text -match "src/styles\.css:\d+: new blank line at EOF") {
-      Remove-TrailingBlankLines -Path (Join-Path $WorkingDirectory "src\styles.css")
-      Invoke-Native -File "git" -Arguments @("add", "--", "src/styles.css") -WorkingDirectory $WorkingDirectory
+
+    $blankLinePaths = @()
+    foreach ($line in @($output)) {
+      $lineText = [string]$line
+      $match = [regex]::Match($lineText, '^(.*):\d+: new blank line at EOF\.?$')
+      if ($match.Success) {
+        $blankLinePaths += $match.Groups[1].Value
+      }
+    }
+    $blankLinePaths = @($blankLinePaths | Select-Object -Unique)
+
+    if ($blankLinePaths.Count -gt 0) {
+      foreach ($relativePath in $blankLinePaths) {
+        $diskPath = Join-Path $WorkingDirectory ($relativePath -replace '/', '\')
+        Remove-TrailingBlankLines -Path $diskPath
+      }
+      Invoke-Native -File "git" -Arguments (@("add", "--") + $blankLinePaths) -WorkingDirectory $WorkingDirectory
       $output = & git diff --check --cached 2>&1
       if ($LASTEXITCODE -eq 0) {
         return
       }
+      $text = ($output | Out-String)
     }
+
     throw "git diff --check --cached failed:`n$text"
   } finally {
     Pop-Location
@@ -336,7 +351,19 @@ function Apply-PublicPatch {
 
 function Get-Sha256 {
   param([string]$Path)
-  return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+
+  $stream = [System.IO.File]::OpenRead([System.IO.Path]::GetFullPath($Path))
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = $sha256.ComputeHash($stream)
+      return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
 }
 
 Assert-Tool -Name "git"

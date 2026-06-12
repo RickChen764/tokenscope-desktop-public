@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::process::{Command, Stdio};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime};
 
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
@@ -18,6 +20,9 @@ use super::ImportScope;
 const CODEX_THREAD_SOURCE: &str = "codex_state_threads";
 const CODEX_ROLLOUT_SOURCE: &str = "codex_rollout_token_counts";
 const CODEX_GENERAL_LIMIT_ID: &str = "codex";
+const CODEX_APP_SERVER_SOURCE: &str = "codex app-server";
+const CODEX_APP_SERVER_RATE_LIMITS_REQUEST_ID: u64 = 2;
+const CODEX_APP_SERVER_TIMEOUT: StdDuration = StdDuration::from_secs(4);
 const CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES: i64 = 15;
 const CODEX_USAGE_LIMIT_SCAN_CACHE_TTL: StdDuration = StdDuration::from_secs(45);
 
@@ -158,6 +163,38 @@ struct CodexRawRateLimitWindow {
     resets_at: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CodexAppServerRateLimitsPayload {
+    #[serde(rename = "rateLimits")]
+    rate_limits: Option<CodexAppServerRateLimit>,
+    #[serde(rename = "rateLimitsByLimitId")]
+    rate_limits_by_limit_id: Option<HashMap<String, CodexAppServerRateLimit>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexAppServerRateLimit {
+    #[serde(rename = "limitId")]
+    limit_id: Option<String>,
+    #[serde(rename = "limitName")]
+    limit_name: Option<String>,
+    #[serde(rename = "planType")]
+    plan_type: Option<String>,
+    #[serde(rename = "rateLimitReachedType")]
+    rate_limit_reached_type: Option<String>,
+    primary: Option<CodexAppServerRateLimitWindow>,
+    secondary: Option<CodexAppServerRateLimitWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexAppServerRateLimitWindow {
+    #[serde(rename = "windowDurationMins")]
+    window_duration_mins: Option<i64>,
+    #[serde(rename = "usedPercent")]
+    used_percent: Option<f64>,
+    #[serde(rename = "resetsAt")]
+    resets_at: Option<i64>,
+}
+
 pub fn default_codex_state_path() -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
@@ -185,9 +222,197 @@ pub fn default_codex_archived_sessions_path() -> Result<PathBuf, String> {
 pub fn get_default_codex_usage_limits_with_options(
     force_refresh: bool,
 ) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    match latest_codex_app_server_usage_limits() {
+        Ok(Some(snapshot)) => return Ok(Some(snapshot)),
+        Ok(None) => {}
+        Err(err) => {
+            crate::perf_log!(
+                "[tokenscope][perf] codex_usage_limits.app_server fallback=true error={}",
+                err
+            );
+        }
+    }
+
     let sessions_path = default_codex_sessions_path()?;
     let archived_sessions_path = default_codex_archived_sessions_path()?;
     latest_codex_usage_limits_from_roots(&[sessions_path, archived_sessions_path], force_refresh)
+}
+
+fn latest_codex_app_server_usage_limits() -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    if std::env::var("TOKENSCOPE_CODEX_APP_SERVER_DISABLED")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+
+    let command = std::env::var("TOKENSCOPE_CODEX_CLI_PATH")
+        .or_else(|_| std::env::var("CODEX_CLI_PATH"))
+        .unwrap_or_else(|_| {
+            let local_app_data = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
+            let path_dirs = std::env::var_os("PATH")
+                .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                .unwrap_or_default();
+            resolve_default_codex_cli_command(local_app_data.as_deref(), &path_dirs)
+        });
+    let args = vec!["app-server".to_string()];
+
+    latest_codex_app_server_usage_limits_with_command(&command, &args, CODEX_APP_SERVER_TIMEOUT)
+}
+
+fn resolve_default_codex_cli_command(
+    local_app_data: Option<&Path>,
+    path_dirs: &[PathBuf],
+) -> String {
+    find_user_local_codex_cli(local_app_data)
+        .or_else(|| find_path_codex_cli(path_dirs))
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| "codex".to_string())
+}
+
+fn find_user_local_codex_cli(local_app_data: Option<&Path>) -> Option<PathBuf> {
+    let bin_root = local_app_data?.join("OpenAI").join("Codex").join("bin");
+    let entries = fs::read_dir(bin_root).ok()?;
+    let mut candidates = Vec::new();
+
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path().join("codex.exe");
+        if path.is_file() {
+            candidates.push(path);
+        }
+    }
+
+    candidates.sort();
+    candidates.pop()
+}
+
+fn find_path_codex_cli(path_dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in path_dirs {
+        if is_windowsapps_codex_package_resource_dir(dir) {
+            continue;
+        }
+
+        for file_name in ["codex.exe", "codex.cmd", "codex.bat", "codex"] {
+            let path = dir.join(file_name);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_windowsapps_codex_package_resource_dir(path: &Path) -> bool {
+    let path_text = path.to_string_lossy().to_ascii_lowercase();
+    path_text.contains("\\program files\\windowsapps\\openai.codex_")
+        && path_text.ends_with("\\app\\resources")
+}
+
+fn latest_codex_app_server_usage_limits_with_command(
+    command: &str,
+    args: &[String],
+    timeout: StdDuration,
+) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    let started = Instant::now();
+    let mut child = Command::new(command)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("failed to start codex app-server: {err}"))?;
+
+    let result = (|| {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "codex app-server stdin is unavailable".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "codex app-server stdout is unavailable".to_string())?;
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if line_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let initialize = json!({
+            "method": "initialize",
+            "id": 1,
+            "params": {
+                "clientInfo": {
+                    "name": "tokenscope_desktop",
+                    "title": "TokenScope Desktop",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }
+        });
+        let initialized = json!({
+            "method": "initialized",
+            "params": {}
+        });
+        let rate_limits = json!({
+            "method": "account/rateLimits/read",
+            "id": CODEX_APP_SERVER_RATE_LIMITS_REQUEST_ID
+        });
+
+        for message in [initialize, initialized, rate_limits] {
+            writeln!(stdin, "{message}").map_err(|err| err.to_string())?;
+        }
+        stdin.flush().map_err(|err| err.to_string())?;
+
+        let captured_at = Utc::now();
+        loop {
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                return Err("codex app-server timed out while reading rate limits".to_string());
+            }
+
+            let remaining = timeout
+                .checked_sub(elapsed)
+                .unwrap_or_else(|| StdDuration::from_millis(0));
+            let line = match line_rx.recv_timeout(remaining) {
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err("codex app-server timed out while reading rate limits".to_string());
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+            };
+
+            if let Some(snapshot) = codex_app_server_response_line_to_snapshot(
+                &line,
+                CODEX_APP_SERVER_RATE_LIMITS_REQUEST_ID,
+                captured_at,
+            )? {
+                return Ok(Some(snapshot));
+            }
+        }
+    })();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    crate::perf_log!(
+        "[tokenscope][perf] codex_usage_limits.app_server elapsed_ms={} status={} found={}",
+        started.elapsed().as_millis(),
+        if result.is_ok() { "ok" } else { "error" },
+        matches!(&result, Ok(Some(_)))
+    );
+
+    result
 }
 
 #[cfg(test)]
@@ -1098,6 +1323,81 @@ fn rollout_line_to_usage_limit_snapshot(
     })
 }
 
+fn codex_app_server_rate_limits_to_snapshot(
+    value: &Value,
+    captured_at: DateTime<Utc>,
+) -> Option<CodexUsageLimitSnapshot> {
+    let payload: CodexAppServerRateLimitsPayload = serde_json::from_value(value.clone()).ok()?;
+    let rate_limit = payload
+        .rate_limits_by_limit_id
+        .as_ref()
+        .and_then(|rate_limits| rate_limits.get(CODEX_GENERAL_LIMIT_ID))
+        .or_else(|| {
+            payload
+                .rate_limits
+                .as_ref()
+                .filter(|rate_limit| rate_limit.limit_id.as_deref() == Some(CODEX_GENERAL_LIMIT_ID))
+        })?;
+    let primary = codex_app_server_rate_limit_window_to_snapshot(rate_limit.primary.clone()?)?;
+    let secondary = codex_app_server_rate_limit_window_to_snapshot(rate_limit.secondary.clone()?)?;
+
+    Some(CodexUsageLimitSnapshot {
+        captured_at: captured_at.to_rfc3339(),
+        source_path: CODEX_APP_SERVER_SOURCE.to_string(),
+        line_number: 0,
+        limit_id: Some(CODEX_GENERAL_LIMIT_ID.to_string()),
+        limit_name: rate_limit.limit_name.clone(),
+        plan_type: rate_limit.plan_type.clone(),
+        rate_limit_reached_type: rate_limit.rate_limit_reached_type.clone(),
+        primary,
+        secondary,
+    })
+}
+
+fn codex_app_server_response_line_to_snapshot(
+    line: &str,
+    request_id: u64,
+    captured_at: DateTime<Utc>,
+) -> Result<Option<CodexUsageLimitSnapshot>, String> {
+    let value: Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
+    if value.get("id").and_then(Value::as_u64) != Some(request_id) {
+        return Ok(None);
+    }
+
+    if let Some(error) = value.get("error") {
+        return Err(format!("codex app-server returned error: {error}"));
+    }
+
+    let Some(result) = value.get("result") else {
+        return Ok(None);
+    };
+
+    Ok(codex_app_server_rate_limits_to_snapshot(
+        result,
+        captured_at,
+    ))
+}
+
+fn codex_app_server_rate_limit_window_to_snapshot(
+    window: CodexAppServerRateLimitWindow,
+) -> Option<CodexUsageLimitWindow> {
+    let window_minutes = window.window_duration_mins?;
+    let used_percent = window.used_percent?;
+    let remaining_percent = (100.0 - used_percent).clamp(0.0, 100.0);
+    let resets_at_local = window.resets_at.and_then(|timestamp| {
+        DateTime::from_timestamp(timestamp, 0)
+            .map(|datetime| datetime.with_timezone(&Local).to_rfc3339())
+    });
+
+    Some(CodexUsageLimitWindow {
+        window_minutes,
+        used_percent,
+        remaining_percent,
+        resets_at: window.resets_at,
+        resets_at_local,
+    })
+}
+
 fn codex_raw_rate_limit_window_to_snapshot(
     window: CodexRawRateLimitWindow,
 ) -> Option<CodexUsageLimitWindow> {
@@ -1380,8 +1680,10 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use chrono::{DateTime, Local, Utc};
+    use serde_json::json;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::{query, Row};
+    use std::time::Duration as StdDuration;
     use uuid::Uuid;
 
     use crate::db::TokenScopeRepository;
@@ -1389,12 +1691,14 @@ mod tests {
     use crate::importers::ImportScope;
 
     use super::{
+        codex_app_server_rate_limits_to_snapshot, codex_app_server_response_line_to_snapshot,
         codex_usage_limit_test_now, import_codex_threads_from_path,
-        import_codex_threads_from_path_with_scope, latest_codex_usage_limits_from_roots,
+        import_codex_threads_from_path_with_scope,
+        latest_codex_app_server_usage_limits_with_command, latest_codex_usage_limits_from_roots,
         latest_codex_usage_limits_from_roots_at, latest_codex_usage_limits_from_sessions_path,
         latest_codex_usage_limits_from_sessions_path_with_stats,
         latest_codex_usage_limits_from_sessions_path_with_stats_force,
-        rollout_line_to_usage_limit_snapshot,
+        resolve_default_codex_cli_command, rollout_line_to_usage_limit_snapshot,
     };
 
     #[test]
@@ -1417,6 +1721,222 @@ mod tests {
         assert_eq!(snapshot.secondary.used_percent, 18.0);
         assert_eq!(snapshot.secondary.remaining_percent, 82.0);
         assert_eq!(snapshot.secondary.resets_at, Some(1781141316));
+    }
+
+    #[test]
+    fn resolves_user_local_codex_cli_before_windowsapps_path_fallback() {
+        let local_app_data =
+            std::env::temp_dir().join(format!("tokenscope-codex-local-{}", Uuid::new_v4()));
+        let rg_dir = local_app_data
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("rg-hash");
+        let codex_dir = local_app_data
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("codex-hash");
+        fs::create_dir_all(&rg_dir).expect("rg fixture dir created");
+        fs::create_dir_all(&codex_dir).expect("codex fixture dir created");
+        fs::write(rg_dir.join("rg.exe"), "").expect("rg fixture written");
+        fs::write(codex_dir.join("codex.exe"), "").expect("codex fixture written");
+
+        let command = resolve_default_codex_cli_command(Some(&local_app_data), &[]);
+
+        assert_eq!(command, codex_dir.join("codex.exe").to_string_lossy());
+
+        fs::remove_dir_all(local_app_data).expect("local app data fixture removed");
+    }
+
+    #[test]
+    fn resolves_path_codex_cli_when_user_local_cli_is_missing() {
+        let local_app_data =
+            std::env::temp_dir().join(format!("tokenscope-codex-local-empty-{}", Uuid::new_v4()));
+        let path_root =
+            std::env::temp_dir().join(format!("tokenscope-codex-path-{}", Uuid::new_v4()));
+        let windows_apps = path_root
+            .join("Program Files")
+            .join("WindowsApps")
+            .join("OpenAI.Codex_26.609.3341.0_x64__2p2nqsd0c76g0")
+            .join("app")
+            .join("resources");
+        let npm_bin = path_root
+            .join("Users")
+            .join("sample")
+            .join("AppData")
+            .join("Roaming")
+            .join("npm");
+        fs::create_dir_all(&local_app_data).expect("empty local app data fixture created");
+        fs::create_dir_all(&windows_apps).expect("windowsapps fixture dir created");
+        fs::create_dir_all(&npm_bin).expect("npm fixture dir created");
+        fs::write(windows_apps.join("codex.exe"), "").expect("windowsapps fixture written");
+        fs::write(npm_bin.join("codex.cmd"), "").expect("npm shim fixture written");
+        let path_dirs = vec![windows_apps, npm_bin.clone()];
+
+        let command = resolve_default_codex_cli_command(Some(&local_app_data), &path_dirs);
+
+        assert_eq!(command, npm_bin.join("codex.cmd").to_string_lossy());
+
+        fs::remove_dir_all(local_app_data).expect("local app data fixture removed");
+        fs::remove_dir_all(path_root).expect("path fixture removed");
+    }
+
+    #[test]
+    fn falls_back_to_codex_command_when_no_usable_cli_is_found() {
+        let local_app_data =
+            std::env::temp_dir().join(format!("tokenscope-codex-local-empty-{}", Uuid::new_v4()));
+        fs::create_dir_all(&local_app_data).expect("empty local app data fixture created");
+
+        let command = resolve_default_codex_cli_command(Some(&local_app_data), &[]);
+
+        assert_eq!(command, "codex");
+
+        fs::remove_dir_all(local_app_data).expect("local app data fixture removed");
+    }
+
+    #[test]
+    fn parses_codex_subscription_rate_limits_from_app_server_response() {
+        let value = json!({
+            "rateLimits": {
+                "limitId": "codex_bengalfox",
+                "limitName": "GPT-5.3-Codex-Spark",
+                "planType": "",
+                "primary": { "usedPercent": 0.0, "windowDurationMins": 300, "resetsAt": 1780746229 },
+                "secondary": { "usedPercent": 0.0, "windowDurationMins": 10080, "resetsAt": 1781141316 },
+                "rateLimitReachedType": null
+            },
+            "rateLimitsByLimitId": {
+                "codex_bengalfox": {
+                    "limitId": "codex_bengalfox",
+                    "limitName": "GPT-5.3-Codex-Spark",
+                    "primary": { "usedPercent": 0.0, "windowDurationMins": 300, "resetsAt": 1780746229 },
+                    "secondary": { "usedPercent": 0.0, "windowDurationMins": 10080, "resetsAt": 1781141316 }
+                },
+                "codex": {
+                    "limitId": "codex",
+                    "limitName": null,
+                    "planType": "pro",
+                    "primary": { "usedPercent": 13.0, "windowDurationMins": 300, "resetsAt": 1780750000 },
+                    "secondary": { "usedPercent": 42.0, "windowDurationMins": 10080, "resetsAt": 1781150000 },
+                    "rateLimitReachedType": null
+                }
+            }
+        });
+        let captured_at = DateTime::parse_from_rfc3339("2026-06-11T12:58:25Z")
+            .expect("test timestamp parses")
+            .with_timezone(&Utc);
+
+        let snapshot = codex_app_server_rate_limits_to_snapshot(&value, captured_at)
+            .expect("app-server subscription rate limits parse");
+
+        assert_eq!(snapshot.captured_at, "2026-06-11T12:58:25+00:00");
+        assert_eq!(snapshot.source_path, "codex app-server");
+        assert_eq!(snapshot.line_number, 0);
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshot.limit_name, None);
+        assert_eq!(snapshot.plan_type.as_deref(), Some("pro"));
+        assert_eq!(snapshot.primary.window_minutes, 300);
+        assert_eq!(snapshot.primary.used_percent, 13.0);
+        assert_eq!(snapshot.primary.remaining_percent, 87.0);
+        assert_eq!(snapshot.primary.resets_at, Some(1780750000));
+        assert_eq!(snapshot.secondary.window_minutes, 10080);
+        assert_eq!(snapshot.secondary.used_percent, 42.0);
+        assert_eq!(snapshot.secondary.remaining_percent, 58.0);
+        assert_eq!(snapshot.secondary.resets_at, Some(1781150000));
+    }
+
+    #[test]
+    fn ignores_app_server_model_specific_rate_limits_without_subscription_bucket() {
+        let value = json!({
+            "rateLimitsByLimitId": {
+                "codex_bengalfox": {
+                    "limitId": "codex_bengalfox",
+                    "limitName": "GPT-5.3-Codex-Spark",
+                    "primary": { "usedPercent": 0.0, "windowDurationMins": 300, "resetsAt": 1780746229 },
+                    "secondary": { "usedPercent": 0.0, "windowDurationMins": 10080, "resetsAt": 1781141316 }
+                }
+            }
+        });
+        let captured_at = DateTime::parse_from_rfc3339("2026-06-11T12:58:25Z")
+            .expect("test timestamp parses")
+            .with_timezone(&Utc);
+
+        let snapshot = codex_app_server_rate_limits_to_snapshot(&value, captured_at);
+
+        assert!(snapshot.is_none());
+    }
+
+    #[test]
+    fn extracts_codex_rate_limits_from_app_server_json_rpc_response() {
+        let line = r#"{"id":6,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","planType":"plus","primary":{"usedPercent":21.0,"windowDurationMins":300,"resetsAt":1780750000},"secondary":{"usedPercent":34.0,"windowDurationMins":10080,"resetsAt":1781150000}}}}}"#;
+        let captured_at = DateTime::parse_from_rfc3339("2026-06-11T12:58:25Z")
+            .expect("test timestamp parses")
+            .with_timezone(&Utc);
+
+        let snapshot = codex_app_server_response_line_to_snapshot(line, 6, captured_at)
+            .expect("json-rpc line parses")
+            .expect("matching response returns snapshot");
+
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshot.plan_type.as_deref(), Some("plus"));
+        assert_eq!(snapshot.primary.used_percent, 21.0);
+        assert_eq!(snapshot.secondary.used_percent, 34.0);
+    }
+
+    #[test]
+    fn ignores_unrelated_app_server_json_rpc_messages() {
+        let notification = r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":99.0,"windowDurationMins":300,"resetsAt":1780750000}}}}"#;
+        let captured_at = DateTime::parse_from_rfc3339("2026-06-11T12:58:25Z")
+            .expect("test timestamp parses")
+            .with_timezone(&Utc);
+
+        let snapshot = codex_app_server_response_line_to_snapshot(notification, 6, captured_at)
+            .expect("notification parses");
+
+        assert!(snapshot.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reads_codex_subscription_rate_limits_from_app_server_process() {
+        let script_path = std::env::temp_dir().join(format!(
+            "tokenscope-codex-app-server-{}.ps1",
+            Uuid::new_v4()
+        ));
+        fs::write(
+            &script_path,
+            r#"
+$null = [Console]::In.ReadLine()
+$null = [Console]::In.ReadLine()
+$null = [Console]::In.ReadLine()
+Write-Output '{"id":2,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","planType":"pro","primary":{"usedPercent":11.0,"windowDurationMins":300,"resetsAt":1780750000},"secondary":{"usedPercent":22.0,"windowDurationMins":10080,"resetsAt":1781150000}}}}}'
+"#,
+        )
+        .expect("fake app-server script written");
+        let args = vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.to_string_lossy().to_string(),
+        ];
+
+        let snapshot = latest_codex_app_server_usage_limits_with_command(
+            "powershell.exe",
+            &args,
+            StdDuration::from_secs(5),
+        )
+        .expect("fake app-server process returns")
+        .expect("app-server snapshot exists");
+
+        assert_eq!(snapshot.source_path, "codex app-server");
+        assert_eq!(snapshot.limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshot.plan_type.as_deref(), Some("pro"));
+        assert_eq!(snapshot.primary.used_percent, 11.0);
+        assert_eq!(snapshot.secondary.used_percent, 22.0);
+
+        fs::remove_file(script_path).expect("fake app-server script removed");
     }
 
     #[test]

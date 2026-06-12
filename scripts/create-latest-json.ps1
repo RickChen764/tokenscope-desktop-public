@@ -33,6 +33,23 @@ function Write-Utf8Text {
   [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($Path), $Text, $script:Utf8NoBom)
 }
 
+function Get-Sha256 {
+  param([string]$Path)
+
+  $stream = [System.IO.File]::OpenRead([System.IO.Path]::GetFullPath($Path))
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = $sha256.ComputeHash($stream)
+      return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Read-JsonFile {
   param([string]$Path)
 
@@ -149,7 +166,7 @@ Assert-ReleaseArtifact -Path $publishedSignaturePath -Name "published updater si
 
 $urlVersion = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }
 $signature = (Read-Utf8Text -Path $signaturePath).Trim()
-$installerSha256 = (Get-FileHash -LiteralPath $publishedBundlePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$installerSha256 = Get-Sha256 -Path $publishedBundlePath
 
 $latestJson = [ordered]@{
   version = $Version

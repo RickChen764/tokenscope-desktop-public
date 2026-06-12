@@ -1516,7 +1516,9 @@ test("release manifest scripts validate versions and updater artifacts before pu
   assert.ok(createLatestJsonScript.includes("Get-PackageVersion"));
   assert.ok(createLatestJsonScript.includes("Assert-VersionConsistency"));
   assert.ok(createLatestJsonScript.includes("Assert-ReleaseArtifact"));
-  assert.ok(createLatestJsonScript.includes("Get-FileHash"));
+  assert.ok(createLatestJsonScript.includes("Get-Sha256"));
+  assert.ok(createLatestJsonScript.includes("System.Security.Cryptography.SHA256"));
+  assert.ok(createLatestJsonScript.includes("ComputeHash"));
   assert.ok(createLatestJsonScript.includes("Installer SHA256"));
   assert.ok(createLatestJsonScript.includes("ConvertFrom-Json"));
   assert.ok(createLatestJsonScript.includes("NotesPath"));
