@@ -2,6 +2,11 @@
 
 ## 2026-06-12
 
+### 0.1.22 更新包
+
+- 隐藏 Codex 余量读取控制台窗口
+- 版本提升到 0.1.22，用于发布新的 Windows NSIS 安装包、Tauri updater 签名文件和 latest.json。
+
 ### 0.1.21 更新包
 
 - 通过 Codex app-server 读取订阅余量

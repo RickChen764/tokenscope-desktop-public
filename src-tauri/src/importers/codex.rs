@@ -7,6 +7,9 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -23,6 +26,8 @@ const CODEX_GENERAL_LIMIT_ID: &str = "codex";
 const CODEX_APP_SERVER_SOURCE: &str = "codex app-server";
 const CODEX_APP_SERVER_RATE_LIMITS_REQUEST_ID: u64 = 2;
 const CODEX_APP_SERVER_TIMEOUT: StdDuration = StdDuration::from_secs(4);
+#[cfg(windows)]
+const WINDOWS_CREATE_NO_WINDOW: u32 = 0x08000000;
 const CODEX_GENERAL_LIMIT_MAX_STALENESS_MINUTES: i64 = 15;
 const CODEX_USAGE_LIMIT_SCAN_CACHE_TTL: StdDuration = StdDuration::from_secs(45);
 
@@ -318,11 +323,9 @@ fn latest_codex_app_server_usage_limits_with_command(
     timeout: StdDuration,
 ) -> Result<Option<CodexUsageLimitSnapshot>, String> {
     let started = Instant::now();
-    let mut child = Command::new(command)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+    let mut command_builder = Command::new(command);
+    configure_codex_app_server_command(&mut command_builder, args);
+    let mut child = command_builder
         .spawn()
         .map_err(|err| format!("failed to start codex app-server: {err}"))?;
 
@@ -413,6 +416,28 @@ fn latest_codex_app_server_usage_limits_with_command(
     );
 
     result
+}
+
+fn configure_codex_app_server_command(command: &mut Command, args: &[String]) {
+    command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    hide_codex_app_server_console_window(command);
+}
+
+#[cfg(windows)]
+fn hide_codex_app_server_console_window(command: &mut Command) {
+    command.creation_flags(windows_codex_app_server_process_creation_flags());
+}
+
+#[cfg(not(windows))]
+fn hide_codex_app_server_console_window(_command: &mut Command) {}
+
+#[cfg(windows)]
+fn windows_codex_app_server_process_creation_flags() -> u32 {
+    WINDOWS_CREATE_NO_WINDOW
 }
 
 #[cfg(test)]
@@ -1699,6 +1724,7 @@ mod tests {
         latest_codex_usage_limits_from_sessions_path_with_stats,
         latest_codex_usage_limits_from_sessions_path_with_stats_force,
         resolve_default_codex_cli_command, rollout_line_to_usage_limit_snapshot,
+        windows_codex_app_server_process_creation_flags,
     };
 
     #[test]
@@ -1793,6 +1819,15 @@ mod tests {
         assert_eq!(command, "codex");
 
         fs::remove_dir_all(local_app_data).expect("local app data fixture removed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_app_server_process_flags_hide_console_window() {
+        assert_eq!(
+            windows_codex_app_server_process_creation_flags() & 0x08000000,
+            0x08000000
+        );
     }
 
     #[test]
