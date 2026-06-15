@@ -280,7 +280,7 @@ impl AgentImporter for CodexImporter {
     }
 
     fn candidate_paths(&self) -> Result<Vec<PathBuf>, String> {
-        codex::default_codex_state_path().map(|path| vec![path])
+        codex::default_codex_state_paths()
     }
 
     fn detected_message(&self) -> &'static str {

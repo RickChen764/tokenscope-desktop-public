@@ -200,28 +200,82 @@ struct CodexAppServerRateLimitWindow {
     resets_at: Option<i64>,
 }
 
-pub fn default_codex_state_path() -> Result<PathBuf, String> {
-    let home = std::env::var("USERPROFILE")
+fn user_home_path() -> Result<PathBuf, String> {
+    std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "unable to resolve user home directory".to_string())?;
+        .map(PathBuf::from)
+        .map_err(|_| "unable to resolve user home directory".to_string())
+}
 
-    Ok(PathBuf::from(home).join(".codex").join("state_5.sqlite"))
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_codex_home_path() -> Result<PathBuf, String> {
+    if let Some(path) = env_path("CODEX_HOME") {
+        return Ok(path);
+    }
+
+    Ok(user_home_path()?.join(".codex"))
+}
+
+fn default_codex_sqlite_home_path() -> Option<PathBuf> {
+    env_path("CODEX_SQLITE_HOME")
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|candidate| candidate == &path) {
+        paths.push(path);
+    }
+}
+
+fn codex_state_path_candidates(codex_home: &Path, sqlite_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(sqlite_home) = sqlite_home {
+        push_unique_path(&mut paths, sqlite_home.join("state_5.sqlite"));
+    }
+    push_unique_path(&mut paths, codex_home.join("sqlite").join("state_5.sqlite"));
+    push_unique_path(&mut paths, codex_home.join("state_5.sqlite"));
+    paths
+}
+
+fn select_default_codex_state_path(paths: &[PathBuf]) -> PathBuf {
+    paths
+        .iter()
+        .find(|path| path.exists())
+        .cloned()
+        .unwrap_or_else(|| {
+            paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| PathBuf::from("state_5.sqlite"))
+        })
+}
+
+pub fn default_codex_state_paths() -> Result<Vec<PathBuf>, String> {
+    let codex_home = default_codex_home_path()?;
+    let sqlite_home = default_codex_sqlite_home_path();
+    Ok(codex_state_path_candidates(
+        &codex_home,
+        sqlite_home.as_deref(),
+    ))
+}
+
+pub fn default_codex_state_path() -> Result<PathBuf, String> {
+    let paths = default_codex_state_paths()?;
+    Ok(select_default_codex_state_path(&paths))
 }
 
 pub fn default_codex_sessions_path() -> Result<PathBuf, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "unable to resolve user home directory".to_string())?;
-
-    Ok(PathBuf::from(home).join(".codex").join("sessions"))
+    Ok(default_codex_home_path()?.join("sessions"))
 }
 
 pub fn default_codex_archived_sessions_path() -> Result<PathBuf, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "unable to resolve user home directory".to_string())?;
-
-    Ok(PathBuf::from(home).join(".codex").join("archived_sessions"))
+    Ok(default_codex_home_path()?.join("archived_sessions"))
 }
 
 pub fn get_default_codex_usage_limits_with_options(
@@ -1717,15 +1771,52 @@ mod tests {
 
     use super::{
         codex_app_server_rate_limits_to_snapshot, codex_app_server_response_line_to_snapshot,
-        codex_usage_limit_test_now, import_codex_threads_from_path,
+        codex_state_path_candidates, codex_usage_limit_test_now, import_codex_threads_from_path,
         import_codex_threads_from_path_with_scope,
         latest_codex_app_server_usage_limits_with_command, latest_codex_usage_limits_from_roots,
         latest_codex_usage_limits_from_roots_at, latest_codex_usage_limits_from_sessions_path,
         latest_codex_usage_limits_from_sessions_path_with_stats,
         latest_codex_usage_limits_from_sessions_path_with_stats_force,
         resolve_default_codex_cli_command, rollout_line_to_usage_limit_snapshot,
-        windows_codex_app_server_process_creation_flags,
+        select_default_codex_state_path, windows_codex_app_server_process_creation_flags,
     };
+
+    #[test]
+    fn codex_state_path_candidates_prefer_sqlite_home_then_new_and_legacy_locations() {
+        let root = std::env::temp_dir().join(format!("tokenscope-codex-home-{}", Uuid::new_v4()));
+        let codex_home = root.join(".codex");
+        let sqlite_home = root.join("custom-sqlite");
+
+        let paths = codex_state_path_candidates(&codex_home, Some(&sqlite_home));
+
+        assert_eq!(
+            paths,
+            vec![
+                sqlite_home.join("state_5.sqlite"),
+                codex_home.join("sqlite").join("state_5.sqlite"),
+                codex_home.join("state_5.sqlite"),
+            ]
+        );
+    }
+
+    #[test]
+    fn select_default_codex_state_path_uses_new_sqlite_state_before_legacy_state() {
+        let root = std::env::temp_dir().join(format!("tokenscope-codex-home-{}", Uuid::new_v4()));
+        let codex_home = root.join(".codex");
+        let new_state = codex_home.join("sqlite").join("state_5.sqlite");
+        let legacy_state = codex_home.join("state_5.sqlite");
+        fs::create_dir_all(new_state.parent().expect("new state has parent"))
+            .expect("new state parent created");
+        fs::write(&new_state, "").expect("new state fixture written");
+        fs::write(&legacy_state, "").expect("legacy state fixture written");
+
+        let selected =
+            select_default_codex_state_path(&codex_state_path_candidates(&codex_home, None));
+
+        assert_eq!(selected, new_state);
+
+        fs::remove_dir_all(root).expect("codex state fixture removed");
+    }
 
     #[test]
     fn parses_codex_rate_limits_from_token_count_event() {
