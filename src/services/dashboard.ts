@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   check,
@@ -29,6 +30,7 @@ import type {
   LlmCallPage,
   LlmCallRow,
   LocalAgentStatus,
+  QuietModeStatus,
   SyncRunResult,
   SyncSettings,
   SyncSettingsInput,
@@ -64,6 +66,7 @@ let hasWrittenAppUpdateInfoThisSession = false;
 const SYNC_SETTINGS_STORAGE_KEY = "tokenscope.syncSettings";
 const APP_UPDATE_STATE_STORAGE_KEY = "tokenscope.appUpdateInfo";
 export const APP_UPDATE_INFO_EVENT = "tokenscope:app-update-info";
+export const QUIET_MODE_STATUS_EVENT = "tokenscope:quiet-mode-changed";
 
 const emptySummary: DashboardSummary = {
   total_tokens: 0,
@@ -180,6 +183,13 @@ function defaultSyncSettings(): SyncSettings {
     next_sync_at: null,
     last_result: null,
     last_error: null,
+  };
+}
+
+function defaultQuietModeStatus(): QuietModeStatus {
+  return {
+    active: false,
+    reason: null,
   };
 }
 
@@ -712,6 +722,26 @@ export function getSyncSettings() {
     {},
     readBrowserSyncSettings(),
   );
+}
+
+export function getQuietModeStatus() {
+  return invokeOrFallback<QuietModeStatus>(
+    "get_quiet_mode_status",
+    {},
+    defaultQuietModeStatus(),
+  );
+}
+
+export async function listenQuietModeStatus(
+  onStatus: (status: QuietModeStatus) => void,
+): Promise<UnlistenFn> {
+  if (!isDesktopRuntime()) {
+    return () => undefined;
+  }
+
+  return listen<QuietModeStatus>(QUIET_MODE_STATUS_EVENT, (event) => {
+    onStatus(event.payload);
+  });
 }
 
 export async function saveSyncSettings(settings: SyncSettingsInput) {

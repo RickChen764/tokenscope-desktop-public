@@ -13,6 +13,7 @@ use tauri::{
 use tokio::time::sleep;
 
 use crate::db::{TokenPulseSnapshot, TokenPulseWindowPosition, TokenScopeRepository};
+use crate::quiet_mode::QuietModeRuntime;
 use crate::AppState;
 
 const TOKEN_PULSE_TRAY_ID: &str = "token-pulse-tray";
@@ -82,7 +83,11 @@ fn token_pulse_hover_state() -> &'static Mutex<TokenPulseInteractionState> {
     TOKEN_PULSE_HOVER_STATE.get_or_init(|| Mutex::new(TokenPulseInteractionState::default()))
 }
 
-pub fn setup_token_pulse_tray(app: &App, repository: TokenScopeRepository) -> tauri::Result<()> {
+pub fn setup_token_pulse_tray(
+    app: &App,
+    repository: TokenScopeRepository,
+    quiet_mode: QuietModeRuntime,
+) -> tauri::Result<()> {
     let Some(icon) = app.default_window_icon().cloned() else {
         return Ok(());
     };
@@ -101,7 +106,7 @@ pub fn setup_token_pulse_tray(app: &App, repository: TokenScopeRepository) -> ta
         .on_tray_icon_event(move |_tray, event| handle_tray_icon_event(&event_app_handle, event))
         .build(app)?;
 
-    spawn_token_pulse_tray_updater(tray, repository.clone());
+    spawn_token_pulse_tray_updater(tray, repository.clone(), quiet_mode);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         track_main_window_close(window);
     }
@@ -630,10 +635,15 @@ fn token_pulse_detail_window_position_for_anchor(
 fn spawn_token_pulse_tray_updater<R: Runtime>(
     tray: tauri::tray::TrayIcon<R>,
     repository: TokenScopeRepository,
+    quiet_mode: QuietModeRuntime,
 ) {
     tauri::async_runtime::spawn(async move {
         loop {
-            if let Ok(snapshot) = repository
+            if quiet_mode.is_active() {
+                let _ = tray.set_tooltip(Some(
+                    "TokenScope Desktop\n静默中：全屏应用运行中".to_string(),
+                ));
+            } else if let Ok(snapshot) = repository
                 .token_pulse_snapshot(TOKEN_PULSE_HISTORY_DAYS)
                 .await
             {

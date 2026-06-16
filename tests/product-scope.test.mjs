@@ -773,7 +773,12 @@ test("desktop tray exposes a today token pulse with historical average compariso
     ),
     false,
   );
-  assert.ok(tokenPulseWindow.includes("useNowMs(showCodexUsageLimits)"));
+  assert.ok(tokenPulseWindow.includes("useQuietModeStatus"));
+  assert.ok(
+    tokenPulseWindow.includes(
+      "useNowMs(showCodexUsageLimits && !quietMode.active)",
+    ),
+  );
   assert.ok(tokenPulseWindow.includes("token-pulse-ring-value"));
   assert.ok(tokenPulseWindow.includes("is-compact"));
   assert.ok(tokenPulseWindow.includes("CodexUsageLimitRing"));
@@ -809,9 +814,8 @@ test("desktop tray exposes a today token pulse with historical average compariso
       "nextSnapshot.today_tokens - previous.todayTokens",
     ),
   );
-  assert.ok(
-    tokenPulseWindow.includes("formatTokenByDisplayMode(snapshot.today_tokens"),
-  );
+  assert.ok(tokenPulseWindow.includes("formatTokenByDisplayMode"));
+  assert.ok(tokenPulseWindow.includes("snapshot.today_tokens"));
   assert.ok(
     tokenPulseWindow.includes("formatTokenByDisplayMode(todayDeltaTokens"),
   );
@@ -1517,7 +1521,9 @@ test("release manifest scripts validate versions and updater artifacts before pu
   assert.ok(createLatestJsonScript.includes("Assert-VersionConsistency"));
   assert.ok(createLatestJsonScript.includes("Assert-ReleaseArtifact"));
   assert.ok(createLatestJsonScript.includes("Get-Sha256"));
-  assert.ok(createLatestJsonScript.includes("System.Security.Cryptography.SHA256"));
+  assert.ok(
+    createLatestJsonScript.includes("System.Security.Cryptography.SHA256"),
+  );
   assert.ok(createLatestJsonScript.includes("ComputeHash"));
   assert.ok(createLatestJsonScript.includes("Installer SHA256"));
   assert.ok(createLatestJsonScript.includes("ConvertFrom-Json"));

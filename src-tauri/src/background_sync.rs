@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 
-use crate::db::{SyncRunResult, TokenScopeRepository};
+use crate::db::{SyncRunResult, SyncSettings, TokenScopeRepository};
 use crate::github_sync::{self, engine::GitHubSyncRuntime};
 use crate::importers::{import_detected_agents, AgentImportResult};
+use crate::quiet_mode::QuietModeRuntime;
 
 #[derive(Clone, Default)]
 pub struct BackgroundSyncRuntime {
@@ -144,6 +145,7 @@ pub fn spawn_background_sync_loop(
     repository: TokenScopeRepository,
     runtime: BackgroundSyncRuntime,
     github_sync_runtime: GitHubSyncRuntime,
+    quiet_mode: QuietModeRuntime,
 ) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -151,7 +153,7 @@ pub fn spawn_background_sync_loop(
             let Ok(settings) = repository.get_sync_settings().await else {
                 continue;
             };
-            if !settings.enabled || !is_due(settings.next_sync_at.as_deref()) {
+            if !should_run_scheduled_sync(&settings, quiet_mode.is_active()) {
                 continue;
             }
 
@@ -164,15 +166,26 @@ pub fn spawn_launch_sync_if_enabled(
     repository: TokenScopeRepository,
     runtime: BackgroundSyncRuntime,
     github_sync_runtime: GitHubSyncRuntime,
+    quiet_mode: QuietModeRuntime,
 ) {
     tauri::async_runtime::spawn(async move {
         let Ok(settings) = repository.get_sync_settings().await else {
             return;
         };
-        if settings.sync_on_startup {
-            let _ = run_once(&repository, &runtime, &github_sync_runtime).await;
+        if !settings.sync_on_startup {
+            return;
         }
+
+        while quiet_mode.is_active() {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        let _ = run_once(&repository, &runtime, &github_sync_runtime).await;
     });
+}
+
+fn should_run_scheduled_sync(settings: &SyncSettings, quiet_mode_active: bool) -> bool {
+    !quiet_mode_active && settings.enabled && is_due(settings.next_sync_at.as_deref())
 }
 
 fn is_due(next_run_at: Option<&str>) -> bool {
@@ -192,6 +205,7 @@ fn has_failed_import(results: &[AgentImportResult]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::db::SyncSettings;
     use crate::importers::AgentImportResult;
 
     #[test]
@@ -217,5 +231,21 @@ mod tests {
 
         assert!(!super::has_failed_import(&[successful_but_mentions_failed]));
         assert!(super::has_failed_import(&[failed_without_failed_word]));
+    }
+
+    #[test]
+    fn scheduled_sync_is_suppressed_while_quiet() {
+        let settings = SyncSettings {
+            enabled: true,
+            interval_minutes: 30,
+            sync_on_startup: true,
+            last_sync_at: None,
+            next_sync_at: Some("2000-01-01T00:00:00+00:00".to_string()),
+            last_result: None,
+            last_error: None,
+        };
+
+        assert!(!super::should_run_scheduled_sync(&settings, true));
+        assert!(super::should_run_scheduled_sync(&settings, false));
     }
 }

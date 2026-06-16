@@ -1,5 +1,11 @@
 export type DashboardRange = "today" | "7d" | "30d" | "90d";
-export type DimensionKind = "agent" | "model" | "provider" | "workflow" | "project" | "session";
+export type DimensionKind =
+  | "agent"
+  | "model"
+  | "provider"
+  | "workflow"
+  | "project"
+  | "session";
 
 export interface CodexImportResult {
   imported: number;
@@ -94,6 +100,11 @@ export interface SyncRunResult {
   finished_at: string;
 }
 
+export interface QuietModeStatus {
+  active: boolean;
+  reason: string | null;
+}
+
 export type GitHubSyncDataMode = "aggregate_v3" | "detail_v2";
 
 export interface GitHubSyncSettingsInput {
@@ -107,8 +118,10 @@ export interface GitHubSyncSettingsInput {
   sync_password?: string | null;
 }
 
-export interface GitHubSyncSettings
-  extends Omit<GitHubSyncSettingsInput, "token" | "sync_password"> {
+export interface GitHubSyncSettings extends Omit<
+  GitHubSyncSettingsInput,
+  "token" | "sync_password"
+> {
   token_configured: boolean;
   token_redacted: string | null;
   sync_password_configured: boolean;

@@ -6,6 +6,7 @@ mod github_sync;
 mod importers;
 pub mod pricing;
 mod proxy;
+mod quiet_mode;
 mod security;
 mod telemetry;
 mod tray_status;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub repository: TokenScopeRepository,
     pub sync_runtime: background_sync::BackgroundSyncRuntime,
     pub github_sync_runtime: github_sync::engine::GitHubSyncRuntime,
+    pub quiet_mode: quiet_mode::QuietModeRuntime,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,21 +45,26 @@ pub fn run() {
 
             let sync_runtime = background_sync::BackgroundSyncRuntime::default();
             let github_sync_runtime = github_sync::engine::GitHubSyncRuntime::default();
+            let quiet_mode = quiet_mode::QuietModeRuntime::default();
             app.manage(AppState {
                 repository: repository.clone(),
                 sync_runtime: sync_runtime.clone(),
                 github_sync_runtime: github_sync_runtime.clone(),
+                quiet_mode: quiet_mode.clone(),
             });
-            tray_status::setup_token_pulse_tray(app, repository.clone())?;
+            quiet_mode::spawn_fullscreen_quiet_mode_guard(app.handle().clone(), quiet_mode.clone());
+            tray_status::setup_token_pulse_tray(app, repository.clone(), quiet_mode.clone())?;
             background_sync::spawn_background_sync_loop(
                 repository.clone(),
                 sync_runtime.clone(),
                 github_sync_runtime.clone(),
+                quiet_mode.clone(),
             );
             background_sync::spawn_launch_sync_if_enabled(
                 repository,
                 sync_runtime,
                 github_sync_runtime,
+                quiet_mode,
             );
             Ok(())
         })
@@ -99,6 +106,7 @@ pub fn run() {
             commands::dashboard::detect_local_agents,
             commands::dashboard::import_detected_agents,
             commands::dashboard::get_sync_settings,
+            commands::dashboard::get_quiet_mode_status,
             commands::dashboard::save_sync_settings,
             commands::dashboard::run_background_sync_once,
             commands::dashboard::sync_today_token_pulse_data,

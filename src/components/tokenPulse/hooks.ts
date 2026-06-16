@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuietModeStatus } from "../../hooks/useQuietMode";
 import { useI18n } from "../../i18n";
 import { useDisplayPreference } from "../../preferences/display";
 import { getCodexUsageLimits, getTokenPulse } from "../../services/dashboard";
-import type { CodexUsageLimitSnapshot, TokenPulseSnapshot } from "../../types/dashboard";
-import { formatCompactToken, formatInteger, formatTokenByDisplayMode } from "../../utils/format";
+import type {
+  CodexUsageLimitSnapshot,
+  TokenPulseSnapshot,
+} from "../../types/dashboard";
+import {
+  formatCompactToken,
+  formatInteger,
+  formatTokenByDisplayMode,
+} from "../../utils/format";
 import {
   TOKEN_PULSE_HISTORY_DAYS,
   buildCodexUsageLimitsViewModel,
@@ -21,8 +29,10 @@ import {
 const TOKEN_PULSE_REFRESH_MS = 60000;
 const TOKEN_PULSE_DELTA_VISIBLE_MS = 10000;
 
-function usePulseSnapshot() {
-  const [snapshot, setSnapshot] = useState<TokenPulseSnapshot>(() => emptyPulseSnapshot());
+function usePulseSnapshot(quietModeActive: boolean) {
+  const [snapshot, setSnapshot] = useState<TokenPulseSnapshot>(() =>
+    emptyPulseSnapshot(),
+  );
   const [todayDeltaTokens, setTodayDeltaTokens] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const isMountedRef = useRef(true);
@@ -136,6 +146,12 @@ function usePulseSnapshot() {
   );
 
   useEffect(() => {
+    if (quietModeActive) {
+      setIsLoading(false);
+      clearDeltaTimer();
+      return;
+    }
+
     isMountedRef.current = true;
     void refreshSnapshot();
     const refreshTimer = window.setInterval(() => {
@@ -147,13 +163,24 @@ function usePulseSnapshot() {
       clearDeltaTimer();
       window.clearInterval(refreshTimer);
     };
-  }, [clearDeltaTimer, refreshSnapshot]);
+  }, [clearDeltaTimer, quietModeActive, refreshSnapshot]);
 
-  return { snapshot, todayDeltaTokens, isLoading, beginPulseDeltaAggregation, refreshSnapshot };
+  return {
+    snapshot,
+    todayDeltaTokens,
+    isLoading,
+    beginPulseDeltaAggregation,
+    refreshSnapshot,
+  };
 }
 
-function useCodexUsageLimitSnapshot(enabled: boolean) {
-  const [snapshot, setSnapshot] = useState<CodexUsageLimitSnapshot | null>(null);
+function useCodexUsageLimitSnapshot(
+  enabled: boolean,
+  quietModeActive: boolean,
+) {
+  const [snapshot, setSnapshot] = useState<CodexUsageLimitSnapshot | null>(
+    null,
+  );
   const isMountedRef = useRef(true);
 
   const refreshSnapshot = useCallback(
@@ -164,7 +191,9 @@ function useCodexUsageLimitSnapshot(enabled: boolean) {
       }
 
       try {
-        const nextSnapshot = await getCodexUsageLimits({ forceRefresh: options.forceRefresh });
+        const nextSnapshot = await getCodexUsageLimits({
+          forceRefresh: options.forceRefresh,
+        });
         if (isMountedRef.current) {
           setSnapshot(nextSnapshot);
         }
@@ -183,6 +212,11 @@ function useCodexUsageLimitSnapshot(enabled: boolean) {
         isMountedRef.current = false;
       };
     }
+    if (quietModeActive) {
+      return () => {
+        isMountedRef.current = false;
+      };
+    }
 
     void refreshSnapshot();
     const refreshTimer = window.setInterval(() => {
@@ -193,7 +227,7 @@ function useCodexUsageLimitSnapshot(enabled: boolean) {
       isMountedRef.current = false;
       window.clearInterval(refreshTimer);
     };
-  }, [enabled, refreshSnapshot]);
+  }, [enabled, quietModeActive, refreshSnapshot]);
 
   return { snapshot, refreshSnapshot };
 }
@@ -220,23 +254,32 @@ function useNowMs(enabled: boolean) {
 export function useTokenPulseViewModel(): TokenPulseViewModel {
   const { numberLocale } = useI18n();
   const { numberDisplayMode, showCodexUsageLimits } = useDisplayPreference();
-  const nowMs = useNowMs(showCodexUsageLimits);
+  const quietMode = useQuietModeStatus();
+  const nowMs = useNowMs(showCodexUsageLimits && !quietMode.active);
   const {
     snapshot,
     todayDeltaTokens,
     isLoading,
     beginPulseDeltaAggregation,
     refreshSnapshot: refreshPulseSnapshot,
-  } = usePulseSnapshot();
+  } = usePulseSnapshot(quietMode.active);
   const {
     snapshot: codexUsageLimitSnapshot,
     refreshSnapshot: refreshCodexUsageLimits,
-  } = useCodexUsageLimitSnapshot(showCodexUsageLimits);
+  } = useCodexUsageLimitSnapshot(showCodexUsageLimits, quietMode.active);
   const hourlyBars = useMemo(() => buildHourlyBars(snapshot), [snapshot]);
   const progressPercent = getProgressPercent(snapshot);
   const ratioLabel = formatRatio(snapshot, numberLocale);
-  const comparisonLabel = buildComparisonLabel(snapshot, ratioLabel, numberLocale);
-  const todayLabel = formatTokenByDisplayMode(snapshot.today_tokens, numberLocale, numberDisplayMode);
+  const comparisonLabel = buildComparisonLabel(
+    snapshot,
+    ratioLabel,
+    numberLocale,
+  );
+  const todayLabel = formatTokenByDisplayMode(
+    snapshot.today_tokens,
+    numberLocale,
+    numberDisplayMode,
+  );
   const todayTitle = `${formatInteger(snapshot.today_tokens, numberLocale)} Token`;
   const todayDeltaLabel =
     todayDeltaTokens !== null
@@ -246,12 +289,26 @@ export function useTokenPulseViewModel(): TokenPulseViewModel {
     todayDeltaTokens !== null
       ? `本次刷新 +${formatInteger(todayDeltaTokens, numberLocale)} Token`
       : null;
-  const averageLabel = formatCompactToken(snapshot.average_daily_tokens, numberLocale);
-  const yesterdayLabel = formatCompactToken(snapshot.yesterday_tokens, numberLocale);
-  const remainingLabel = formatCompactToken(snapshot.remaining_to_average, numberLocale);
+  const averageLabel = formatCompactToken(
+    snapshot.average_daily_tokens,
+    numberLocale,
+  );
+  const yesterdayLabel = formatCompactToken(
+    snapshot.yesterday_tokens,
+    numberLocale,
+  );
+  const remainingLabel = formatCompactToken(
+    snapshot.remaining_to_average,
+    numberLocale,
+  );
   const todayDateLabel = snapshot.today_local.slice(5);
   const codexUsageLimits = useMemo(
-    () => buildCodexUsageLimitsViewModel(codexUsageLimitSnapshot, numberLocale, nowMs),
+    () =>
+      buildCodexUsageLimitsViewModel(
+        codexUsageLimitSnapshot,
+        numberLocale,
+        nowMs,
+      ),
     [codexUsageLimitSnapshot, nowMs, numberLocale],
   );
   const refreshSnapshot = useCallback(async () => {

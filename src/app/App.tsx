@@ -13,6 +13,7 @@ import {
 } from "../components/TokenPulseWindow";
 import { TopList } from "../components/TopList";
 import { ToastNotice, type ToastNoticeValue } from "../components/ToastNotice";
+import { useQuietModeStatus } from "../hooks/useQuietMode";
 import { useI18n } from "../i18n";
 import {
   APP_UPDATE_INFO_EVENT,
@@ -120,6 +121,7 @@ export function App() {
   }
 
   const { numberLocale, t } = useI18n();
+  const quietMode = useQuietModeStatus();
   const [view, setView] = useState<DashboardView>("overview");
   const [range, setRange] = useState<DashboardRangeMode>("30d");
   const initialCustomWindow = useMemo(() => getLocalDateWindow("90d"), []);
@@ -254,6 +256,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (quietMode.active) {
+      return;
+    }
+
     let isDisposed = false;
     let isRunning = false;
 
@@ -287,7 +293,7 @@ export function App() {
       isDisposed = true;
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [quietMode.active]);
 
   async function handleInstallAppUpdate() {
     setIsInstallingAppUpdate(true);

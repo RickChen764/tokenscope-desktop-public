@@ -25,6 +25,7 @@ use crate::importers::{
     import_detected_agents_with_mode as import_agents, source_keys_for_agent,
 };
 use crate::importers::{AgentImportResult, ImportMode, LocalAgentStatus};
+use crate::quiet_mode::QuietModeStatus;
 use crate::AppState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -474,6 +475,11 @@ pub async fn get_sync_settings(state: State<'_, AppState>) -> Result<SyncSetting
         .get_sync_settings()
         .await
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn get_quiet_mode_status(state: State<'_, AppState>) -> QuietModeStatus {
+    state.quiet_mode.status()
 }
 
 #[tauri::command]
