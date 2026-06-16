@@ -2,6 +2,11 @@
 
 ## 2026-06-16
 
+### 0.1.25 更新包
+
+- 容错处理 GitHub 同步 manifest 解析失败
+- 版本提升到 0.1.25，用于发布新的 Windows NSIS 安装包、Tauri updater 签名文件和 latest.json。
+
 ### 0.1.24 更新包
 
 - 增加全屏静默模式

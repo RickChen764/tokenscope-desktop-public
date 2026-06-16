@@ -917,10 +917,15 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
 
         let remote_data_mode =
             remote_manifest_data_mode(transport, layout, &remote_device_id, sync_password).await?;
-        repository
-            .update_external_dataset_sync_data_mode_for_device(&remote_device_id, &remote_data_mode)
-            .await
-            .map_err(|err| err.to_string())?;
+        if let Some(remote_data_mode) = remote_data_mode.as_deref() {
+            repository
+                .update_external_dataset_sync_data_mode_for_device(
+                    &remote_device_id,
+                    remote_data_mode,
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+        }
         let bootstrap_path = layout.bootstrap_path(&remote_device_id);
         import_remote_shard(
             repository,
@@ -930,7 +935,7 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
                 shard_hint: None,
                 sync_password,
                 force_reimport: false,
-                expected_data_mode: Some(remote_data_mode.as_str()),
+                expected_data_mode: remote_data_mode.as_deref(),
             },
             &mut summary,
         )
@@ -973,7 +978,7 @@ async fn download_remote_updates<T: GitHubSyncTransport>(
                     }),
                     sync_password,
                     force_reimport: false,
-                    expected_data_mode: Some(remote_data_mode.as_str()),
+                    expected_data_mode: remote_data_mode.as_deref(),
                 },
                 &mut summary,
             )
@@ -1027,13 +1032,15 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
         request.sync_password,
     )
     .await?;
-    repository
-        .update_external_dataset_sync_data_mode_for_device(
-            request.remote_device_id,
-            &remote_data_mode,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+    if let Some(remote_data_mode) = remote_data_mode.as_deref() {
+        repository
+            .update_external_dataset_sync_data_mode_for_device(
+                request.remote_device_id,
+                remote_data_mode,
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+    }
     import_remote_shard(
         repository,
         transport,
@@ -1042,7 +1049,7 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
             shard_hint: None,
             sync_password: request.sync_password,
             force_reimport: request.force_reimport,
-            expected_data_mode: Some(remote_data_mode.as_str()),
+            expected_data_mode: remote_data_mode.as_deref(),
         },
         summary,
     )
@@ -1087,7 +1094,7 @@ async fn download_remote_device_updates<T: GitHubSyncTransport>(
                 }),
                 sync_password: request.sync_password,
                 force_reimport: request.force_reimport,
-                expected_data_mode: Some(remote_data_mode.as_str()),
+                expected_data_mode: remote_data_mode.as_deref(),
             },
             summary,
         )
@@ -1136,10 +1143,15 @@ async fn download_remote_today_updates<T: GitHubSyncTransport>(
             request.sync_password,
         )
         .await?;
-        repository
-            .update_external_dataset_sync_data_mode_for_device(&remote_device_id, &remote_data_mode)
-            .await
-            .map_err(|err| err.to_string())?;
+        if let Some(remote_data_mode) = remote_data_mode.as_deref() {
+            repository
+                .update_external_dataset_sync_data_mode_for_device(
+                    &remote_device_id,
+                    remote_data_mode,
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+        }
         let day_path = request
             .layout
             .day_path(&remote_device_id, request.date_local);
@@ -1159,7 +1171,7 @@ async fn download_remote_today_updates<T: GitHubSyncTransport>(
                 }),
                 sync_password: request.sync_password,
                 force_reimport: false,
-                expected_data_mode: Some(remote_data_mode.as_str()),
+                expected_data_mode: remote_data_mode.as_deref(),
             },
             &mut summary,
         )
@@ -1335,20 +1347,33 @@ async fn remote_manifest_data_mode<T: GitHubSyncTransport>(
     layout: &GitHubSyncLayout,
     device_id: &str,
     sync_password: &str,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     let manifest_path = layout.manifest_path(device_id);
     let Some(file) = transport.get_file(&manifest_path).await? else {
-        return Ok(GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string());
+        return Ok(Some(GITHUB_SYNC_DATA_MODE_DETAIL_V2.to_string()));
     };
-    let plaintext = decrypt_remote_file_bytes(
-        &manifest_path,
-        &file.content,
-        sync_password,
-        "GitHub 同步远端 manifest 读取失败",
-    )?;
-    let manifest = serde_json::from_slice::<GitHubSyncManifest>(&plaintext)
-        .map_err(|err| format!("GitHub 同步远端 manifest 解析失败：{manifest_path}：{err}"))?;
-    Ok(normalize_github_sync_data_mode(&manifest.active_data_mode).to_string())
+    let plaintext = match decrypt_sync_payload_bytes(&file.content, sync_password) {
+        Ok(plaintext) => plaintext,
+        Err(err) if is_optional_manifest_error(&err) => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "GitHub 同步远端 manifest 读取失败：{manifest_path}：{err}"
+            ))
+        }
+    };
+    let manifest = match serde_json::from_slice::<GitHubSyncManifest>(&plaintext) {
+        Ok(manifest) => manifest,
+        Err(_) => return Ok(None),
+    };
+    Ok(Some(
+        normalize_github_sync_data_mode(&manifest.active_data_mode).to_string(),
+    ))
+}
+
+fn is_optional_manifest_error(err: &str) -> bool {
+    !err.contains("解密失败")
+        && !err.contains("同步密码不能为空")
+        && !err.contains("派生同步密钥失败")
 }
 
 async fn export_local_github_sync_package(
@@ -2075,7 +2100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_reports_remote_manifest_path_when_manifest_is_not_an_encrypted_envelope() {
+    async fn sync_reports_remote_manifest_path_when_manifest_password_is_wrong() {
         let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
         repository.migrate().await.unwrap();
         repository
@@ -2088,15 +2113,59 @@ mod tests {
             .unwrap();
         let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
         let transport = FakeGitHubTransport::default();
-        transport.seed_file(&layout.manifest_path("remote-a"), Vec::new());
+        transport.seed_file(
+            &layout.manifest_path("remote-a"),
+            encrypted_manifest_bytes(
+                "remote-a",
+                GITHUB_SYNC_DATA_MODE_DETAIL_V2,
+                "wrong-password",
+            ),
+        );
 
         let err = run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
             .await
-            .expect_err("corrupt remote manifest fails");
+            .expect_err("wrong manifest password fails");
 
         assert!(err.contains("GitHub 同步远端 manifest 读取失败"));
-        assert!(err.contains("GitHub 同步分片加密信封解析失败"));
+        assert!(err.contains("解密失败"));
         assert!(err.contains("tokenscope-sync/v1/devices/remote-a/manifest.enc"));
+    }
+
+    #[tokio::test]
+    async fn sync_continues_when_remote_manifest_is_not_an_encrypted_envelope() {
+        let repository = TokenScopeRepository::connect_in_memory().await.unwrap();
+        repository.migrate().await.unwrap();
+        repository
+            .save_github_sync_settings(&valid_settings())
+            .await
+            .unwrap();
+        repository
+            .set_github_sync_bootstrap_uploaded(true)
+            .await
+            .unwrap();
+        let layout = GitHubSyncLayout::new("tokenscope-sync".to_string());
+        let transport = FakeGitHubTransport::default();
+        transport.seed_file(
+            &layout.manifest_path("remote-a"),
+            b"not an envelope".to_vec(),
+        );
+        let remote_package = remote_day_package("remote-a", "2026-06-05", 300);
+        transport.seed_file(
+            &layout.day_path("remote-a", "2026-06-05"),
+            encrypted_package_bytes(&remote_package, "sync-password"),
+        );
+
+        let result =
+            run_github_sync_once_with_transport(&repository, &transport, SyncRunMode::Normal)
+                .await
+                .expect("sync ignores corrupt optional manifest");
+
+        assert_eq!(result.downloaded_shards, 1);
+        assert_eq!(result.imported, 1);
+        assert_eq!(
+            imported_token_sum(&repository, "device-remote-a", "2026-06-05").await,
+            300
+        );
     }
 
     #[test]
@@ -2301,6 +2370,18 @@ mod tests {
     fn encrypted_package_bytes(package: &GitHubSyncPackage, sync_password: &str) -> Vec<u8> {
         let plaintext = package_bytes(package).expect("package serializes");
         let envelope = encrypt_sync_payload(&plaintext, sync_password).expect("package encrypts");
+        serde_json::to_vec(&envelope).expect("envelope serializes")
+    }
+
+    fn encrypted_manifest_bytes(device_id: &str, data_mode: &str, sync_password: &str) -> Vec<u8> {
+        let manifest = GitHubSyncManifest {
+            version: 1,
+            device_id: device_id.to_string(),
+            updated_at: "2026-06-05T10:00:00+08:00".to_string(),
+            active_data_mode: data_mode.to_string(),
+        };
+        let plaintext = serde_json::to_vec(&manifest).expect("manifest serializes");
+        let envelope = encrypt_sync_payload(&plaintext, sync_password).expect("manifest encrypts");
         serde_json::to_vec(&envelope).expect("envelope serializes")
     }
 
